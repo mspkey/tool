@@ -1,6 +1,6 @@
 package sdk
 
-import "gitee.com/mspkey/tool/msp"
+import "github.com/mspkey/tool/msp"
 
 // GetDevID 获取设备ID
 func GetDevID() string {

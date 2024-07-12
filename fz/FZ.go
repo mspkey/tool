@@ -2,7 +2,7 @@ package fz
 
 import (
 	"errors"
-	"gitee.com/mspkey/tool/win32"
+	"github.com/mspkey/tool/win32"
 	"golang.org/x/sys/windows"
 	"unsafe"
 )
