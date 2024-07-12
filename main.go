@@ -1,65 +1,16 @@
 package main
 
-import (
-	"errors"
-	"fmt"
-	"gitee.com/mspkey/tool/sdk"
-	"log"
-)
-
 func main() {
-	ms := sdk.MspKey{}
-	DevID := sdk.GetDevID()
-	err := ms.Init("msplock.vip:8810", "6596a0f241717f66bb0457d1", DevID, "646e0cdba20867821d3cc050")
-	if err != nil {
-		log.Fatalln(err)
-	}
 
-	err = ms.QuickLogin()
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	if !ms.IsLogin() {
-		log.Fatalln(errors.New("尚未登录"))
-	}
-
-	err = ms.GetUserInfo()
-	if err != nil {
-		log.Fatalln(err)
-	}
-	log.Println(fmt.Sprintf("到期时间为:%s", ms.Info.EndTime))
 }
 
 // test 测试例子
 func test() {
 
-	ms := sdk.MspKey{}
-	ms.IsDug = true
-	DevID := sdk.GetDevID()
-	err := ms.Init("msplock.vip:8810", "6596a0f241717f66bb0457d1", DevID, "646e0cdba20867821d3cc050")
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	err = ms.QuickLogin()
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	if !ms.IsLogin() {
-		log.Fatalln(errors.New("尚未登录"))
-	}
-
-	err = ms.GetUserInfo()
-	if err != nil {
-		log.Fatalln(err)
-	}
-	log.Println(fmt.Sprintf("到期时间为:%s", ms.Info.EndTime.Location()))
 	//请初始化你的远程变量
 
 	//获取软件信息
-	//_ = ms.GetExeInfo()123
+	//_ = ms.GetExeInfo()
 	//log.Println(ms.Exe.Title)
 
 	//获取验证码
