@@ -3,12 +3,14 @@ package msp
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math/rand"
 	"time"
-	"errors"
 )
 
-//Mspkey 解析数据
+const TimeInit = "2006-01-02 15:04:05"
+
+// Mspkey 解析数据
 func Mspkey(Data, Key string, out interface{}) error {
 
 	sDec, err := base64.StdEncoding.DecodeString(Data)
@@ -25,10 +27,9 @@ func Mspkey(Data, Key string, out interface{}) error {
 
 	return nil
 
-
 }
 
-//GetRandomString 获取随机字母  l:长度
+// GetRandomString 获取随机字母  l:长度
 func GetRandomString(length int) string {
 	str := "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	bytes := []byte(str)
@@ -38,4 +39,11 @@ func GetRandomString(length int) string {
 		result = append(result, bytes[r.Intn(len(bytes))])
 	}
 	return string(result)
+}
+
+// TimeFormat 格式化时间
+func TimeFormat(time time.Time) string {
+	str := time.Local().Format(TimeInit)
+
+	return str
 }
