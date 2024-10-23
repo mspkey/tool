@@ -436,7 +436,7 @@ func (c *MspKey) ping() {
 // QuickLogin 快速登录
 func (c *MspKey) QuickLogin() error {
 	//打开网页
-	url := fmt.Sprintf("http://%s/WebLogin?DevKey=%s", c.config.IP, c.devKey)
+	url := fmt.Sprintf("http://%s/#/WebLogin?DevKey=%s", c.config.IP, c.devKey)
 	_ = msp.OpenBrowser(url)
 	log.Println("网页登录地址:" + url)
 	c.ClearRes()
@@ -481,7 +481,7 @@ func (c *MspKey) getToken() string {
 		"ExeID":   c.config.ExeID,
 		"DevID":   c.config.DevID,
 		"Version": c.config.Version,
-		"ExeMD5":  "",
+		"ExeMD5":  c.config.ExeMD5,
 		"AdminID": c.config.AdminKey,
 		"Time":    fmt.Sprintf("%d", time.Now().Unix()),
 		"CRCOld":  "",

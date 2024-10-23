@@ -25,6 +25,7 @@ type Config struct {
 	Version  string //当前版本
 	DevID    string //设备ID
 	AdminKey string //密钥
+	ExeMD5   string //软件的md5值
 }
 
 // ExeInfo 软件
