@@ -224,7 +224,7 @@ func (c *MspKey) sendData(data sendJson) {
 }
 
 // Init 验证初始化 ok
-func (c *MspKey) Init(Config Config)error {
+func (c *MspKey) Init(Config Config) error {
 	var err error
 	c.config = Config
 	url := fmt.Sprintf("ws://%s/api/user/ws?ExeID=%s&DevID=%s", Config.IP, Config.ExeID, Config.DevID)
@@ -264,7 +264,7 @@ func (c *MspKey) Init(Config Config)error {
 		count++
 		time.Sleep(time.Second)
 	}
-	_ = c.conn.Close()	
+	_ = c.conn.Close()
 	return errors.New("等待超时")
 }
 
@@ -444,7 +444,7 @@ func (c *MspKey) ping() {
 // QuickLogin 快速登录
 func (c *MspKey) QuickLogin() error {
 	//打开网页
-	url := fmt.Sprintf("http://%s/WebLogin?DevKey=%s", c.config.IP, c.devKey)
+	url := fmt.Sprintf("http://%s//#WebLogin?DevKey=%s", strings.ReplaceAll(c.config.IP, "8810", "8800"), c.devKey)
 	_ = msp.OpenBrowser(url)
 	log.Println("网页登录地址:" + url)
 	c.ClearRes()
