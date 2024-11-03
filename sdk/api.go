@@ -444,7 +444,7 @@ func (c *MspKey) ping() {
 // QuickLogin 快速登录
 func (c *MspKey) QuickLogin() error {
 	//打开网页
-	url := fmt.Sprintf("http://%s//#WebLogin?DevKey=%s", strings.ReplaceAll(c.config.IP, "8810", "8800"), c.devKey)
+	url := fmt.Sprintf("http://%s/#/WebLogin?DevKey=%s", strings.ReplaceAll(c.config.IP, "8810", "8800"), c.devKey)
 	_ = msp.OpenBrowser(url)
 	log.Println("网页登录地址:" + url)
 	c.ClearRes()
