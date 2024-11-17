@@ -135,3 +135,6 @@ const tagAliPayCreate = "AliPayCreate"
 const tagCompletePayment = "isCompletePayment"
 const tagPing = "Ping"
 const tagQuick = "QuickLogin"
+
+const defaultKey = "mspkey"
+const tagCkLogin = "CKLogin"

@@ -44,6 +44,7 @@ func rc4DecodeString(key string, Base64Data string) ([]byte, error) {
 }
 
 type MspKey struct {
+	url      string //连接URL
 	conn     *websocket.Conn
 	state    bool     //服务器是否连接成功
 	res      resJson  //返回的源数据
@@ -54,6 +55,7 @@ type MspKey struct {
 	IsDug    bool     //是否调试信息输出
 	variable string   //远程变量
 	config   Config
+	isReset  bool //断线重连标志 true 时表示断线重连过了 只针对登录的有效
 }
 
 func (c *MspKey) IsLogin() bool {
@@ -98,7 +100,13 @@ func (c *MspKey) onMessage() {
 	for {
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
-			log.Fatalln("服务器断开连接")
+			c.state = false
+			log.Println("服务器断开连接")
+			//进行断线重连
+			if c.isReset {
+				log.Println("断线重连中....")
+				go c.RestConn()
+			}
 			return
 		}
 		res := strings.ReplaceAll(string(msg), "\"", "")
@@ -125,6 +133,27 @@ func (c *MspKey) onMessage() {
 		//动态密钥替换操作
 		if c.devKey == "mspkey" && c.res.Tag == tagDevKey {
 			c.devKey = fmt.Sprintf("%s", c.res.Data)
+
+			//启动心跳包
+			go func() {
+				err := c.GetExeInfo()
+				if err != nil {
+					log.Fatalln(err)
+				}
+				c.state = true
+				//先发一次心跳包 用于检测版本等信息
+				c.ping()
+				//启动检测
+				go c.safe()
+
+				for {
+					time.Sleep(time.Second * 60)
+					c.ping()
+					if !c.state {
+						return
+					}
+				}
+			}()
 			continue
 		}
 
@@ -225,47 +254,74 @@ func (c *MspKey) sendData(data sendJson) {
 
 // Init 验证初始化 ok
 func (c *MspKey) Init(Config Config) error {
-	var err error
 	c.config = Config
-	url := fmt.Sprintf("ws://%s/api/user/ws?ExeID=%s&DevID=%s", Config.IP, Config.ExeID, Config.DevID)
-	c.devKey = "mspkey" //默认密钥
-	c.conn, _, err = websocket.DefaultDialer.Dial(url, nil)
+	c.devKey = defaultKey //默认密钥
+	c.url = fmt.Sprintf("ws://%s/api/user/ws?ExeID=%s&DevID=%s", Config.IP, Config.ExeID, Config.DevID)
+	var err error
+	count := 0
+	c.conn, _, err = websocket.DefaultDialer.Dial(c.url, nil)
 	if err != nil {
 		log.Fatalln("服务器连接失败")
 	}
+	log.Println("服务器连接成功")
 	go c.onMessage()
-	//启动程序监听程序
-	count := 0
+
 	for {
-		if c.devKey != "mspkey" {
-			err := c.GetExeInfo()
-			if err != nil {
-				return err
-			}
-			c.state = true
-			//先发一次心跳包 用于检测版本等信息
-			c.ping()
-			//启动心跳包
-			go func() {
-				for {
-					time.Sleep(time.Second * 60)
-					c.ping()
-				}
-			}()
-
-			//启动检测
-			go c.safe()
-
+		if c.devKey != defaultKey {
+			c.isReset = true
 			return nil
 		}
-		if count >= 5 {
-			break
+		if count > 10 {
+			return errors.New("等待超时")
 		}
 		count++
 		time.Sleep(time.Second)
 	}
-	_ = c.conn.Close()
-	return errors.New("等待超时")
+
+}
+
+// RestConn 断线重连操作
+func (c *MspKey) RestConn() {
+
+	var err error
+	c.devKey = defaultKey //默认密钥
+	count := 0
+	for {
+		log.Println(fmt.Sprintf("第%d次断线重连", count+1))
+		time.Sleep(time.Second * 3)
+		c.conn, _, err = websocket.DefaultDialer.Dial(c.url, nil)
+		if err != nil {
+			if count > 200 {
+				log.Fatalln("断线重连失败")
+			}
+			count++
+			continue
+		}
+		log.Println("断线重连成功,自动登录中...")
+		break
+	}
+
+	go c.onMessage()
+
+	//需要ck自动登录
+	time.Sleep(time.Second)
+	for {
+		if c.devKey != defaultKey {
+			if c.Info.Name != "" {
+				err = c.CkLogin(c.Info.ID.Hex())
+				if err != nil {
+					log.Fatalln(err)
+				} else {
+					log.Println("自动登录成功")
+					break
+				}
+			} else {
+				log.Fatalln("尚未登录")
+			}
+
+		}
+	}
+
 }
 
 // GetExeInfo 获取软件基本信息 ok
@@ -303,6 +359,21 @@ func (c *MspKey) CarLogin(Serial string) error {
 	var p sendJson
 	p.Type = tagCarLogin
 	p.Data = bson.M{"Serial": Serial}
+	c.sendData(p)
+	err := c.aWaitRes(p.Type)
+	if err != nil {
+		return err
+	}
+	c.isLogin = true
+	return nil
+}
+
+// CkLogin ck登录
+func (c *MspKey) CkLogin(CK string) error {
+	c.ClearRes()
+	var p sendJson
+	p.Type = tagCkLogin
+	p.Data = bson.M{"CK": CK}
 	c.sendData(p)
 	err := c.aWaitRes(p.Type)
 	if err != nil {
@@ -478,6 +549,9 @@ func (c *MspKey) safe() {
 		time.Sleep(time.Second * 15)
 		if c.Exe.AdminID.Hex() != c.config.AdminKey {
 			log.Fatalln("密钥错误")
+		}
+		if !c.state {
+			return
 		}
 	}
 }
