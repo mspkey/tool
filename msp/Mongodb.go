@@ -156,3 +156,9 @@ func (c *MongoDB) Count(collection string, find interface{}) (int64, error) {
 	documents, err := c.Client.Database(c.database).Collection(collection).CountDocuments(c.Ctx, find)
 	return documents, err
 }
+
+// CollectionOps 其他选项用于使用原生库函数
+func (c *MongoDB) CollectionOps(collection string) *mongo.Collection {
+	res := c.Client.Database(c.database).Collection(collection)
+	return res
+}
