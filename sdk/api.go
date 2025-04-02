@@ -10,6 +10,7 @@ import (
 	"github.com/mspkey/tool/msp"
 	"go.mongodb.org/mongo-driver/bson"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -131,9 +132,8 @@ func (c *MspKey) onMessage() {
 		}
 
 		//动态密钥替换操作
-		if c.devKey == "mspkey" && c.res.Tag == tagDevKey {
+		if c.res.Tag == tagDevKey {
 			c.devKey = fmt.Sprintf("%s", c.res.Data)
-
 			//启动心跳包
 			go func() {
 				err := c.GetExeInfo()
@@ -255,11 +255,17 @@ func (c *MspKey) sendData(data sendJson) {
 // Init 验证初始化 ok
 func (c *MspKey) Init(Config Config) error {
 	c.config = Config
-	c.devKey = defaultKey //默认密钥
+	key := msp.GetRandomString(6)
+	c.devKey = key //默认密钥
 	c.url = fmt.Sprintf("ws://%s/api/user/ws?ExeID=%s&DevID=%s", Config.IP, Config.ExeID, Config.DevID)
 	var err error
 	count := 0
-	c.conn, _, err = websocket.DefaultDialer.Dial(c.url, nil)
+
+	// 创建自定义的 HTTP Header
+	header := http.Header{}
+	header.Set("Key", base64.StdEncoding.EncodeToString([]byte(c.devKey))) // 添加自定义头部
+	log.Println(header)
+	c.conn, _, err = websocket.DefaultDialer.Dial(c.url, header)
 	if err != nil {
 		log.Fatalln("服务器连接失败")
 	}
@@ -267,7 +273,7 @@ func (c *MspKey) Init(Config Config) error {
 	go c.onMessage()
 
 	for {
-		if c.devKey != defaultKey {
+		if c.devKey != key {
 			c.isReset = true
 			return nil
 		}
@@ -282,14 +288,17 @@ func (c *MspKey) Init(Config Config) error {
 
 // RestConn 断线重连操作
 func (c *MspKey) RestConn() {
-
+	key := msp.GetRandomString(6)
+	c.devKey = key
 	var err error
-	c.devKey = defaultKey //默认密钥
 	count := 0
 	for {
 		log.Println(fmt.Sprintf("第%d次断线重连", count+1))
 		time.Sleep(time.Second * 3)
-		c.conn, _, err = websocket.DefaultDialer.Dial(c.url, nil)
+		header := http.Header{}
+		header.Add("Key", base64.StdEncoding.EncodeToString([]byte(c.devKey))) // 添加自定义头部
+		c.conn, _, err = websocket.DefaultDialer.Dial(c.url, header)
+
 		if err != nil {
 			if count > 200 {
 				log.Fatalln("断线重连失败")
@@ -306,7 +315,7 @@ func (c *MspKey) RestConn() {
 	//需要ck自动登录
 	time.Sleep(time.Second)
 	for {
-		if c.devKey != defaultKey {
+		if c.devKey != key {
 			if c.Info.Name != "" {
 				err = c.CkLogin(c.Info.ID.Hex())
 				if err != nil {
