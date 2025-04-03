@@ -263,8 +263,7 @@ func (c *MspKey) Init(Config Config) error {
 
 	// 创建自定义的 HTTP Header
 	header := http.Header{}
-	header.Set("Key", base64.StdEncoding.EncodeToString([]byte(c.devKey))) // 添加自定义头部
-	log.Println(header)
+	header.Set("Key", base64.StdEncoding.EncodeToString([]byte(c.devKey))) // 添加自定义头部	
 	c.conn, _, err = websocket.DefaultDialer.Dial(c.url, header)
 	if err != nil {
 		log.Fatalln("服务器连接失败")
@@ -296,7 +295,7 @@ func (c *MspKey) RestConn() {
 		log.Println(fmt.Sprintf("第%d次断线重连", count+1))
 		time.Sleep(time.Second * 3)
 		header := http.Header{}
-		header.Add("Key", base64.StdEncoding.EncodeToString([]byte(c.devKey))) // 添加自定义头部
+		header.Set("Key", base64.StdEncoding.EncodeToString([]byte(c.devKey))) // 添加自定义头部
 		c.conn, _, err = websocket.DefaultDialer.Dial(c.url, header)
 
 		if err != nil {

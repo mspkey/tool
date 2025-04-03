@@ -6,6 +6,7 @@ import (
 	"github.com/mspkey/tool/sdk"
 	"log"
 	"testing"
+	"time"
 )
 
 func TestAdd(t *testing.T) {
@@ -41,5 +42,10 @@ func TestAdd(t *testing.T) {
 		log.Fatalln(err)
 	}
 	fmt.Println(fmt.Sprintf("到期时间为:%s", ms.Info.EndTime))
+
+	for true {
+		time.Sleep(time.Second * 3)
+		log.Println("-->")
+	}
 
 }
