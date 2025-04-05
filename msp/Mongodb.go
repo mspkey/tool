@@ -27,7 +27,7 @@ func (c *MongoDB) SetDB(url string) error {
 	//	return errors.New("数据库连接失败")
 	//}
 	clientOptions := options.Client().ApplyURI(url)
-	clientOptions.SetMaxPoolSize(100)                 // 设置最大连接数
+	clientOptions.SetMaxPoolSize(1000)                 // 设置最大连接数
 	clientOptions.SetMinPoolSize(5)                   // 设置最小连接数
 	clientOptions.SetConnectTimeout(50 * time.Second) // 设置连接超时时间
 	client, err := mongo.Connect(context.Background(), clientOptions)
