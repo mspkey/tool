@@ -257,13 +257,23 @@ func (c *MspKey) Init(Config Config) error {
 	c.config = Config
 	key := msp.GetRandomString(6)
 	c.devKey = key //默认密钥
-	c.url = fmt.Sprintf("ws://%s/api/user/ws?ExeID=%s&DevID=%s", Config.IP, Config.ExeID, Config.DevID)
+	c.url = fmt.Sprintf("ws://%s/api/user/ws", Config.IP)
 	var err error
 	count := 0
 
 	// 创建自定义的 HTTP Header
 	header := http.Header{}
-	header.Set("Key", base64.StdEncoding.EncodeToString([]byte(c.devKey))) // 添加自定义头部	
+	header.Set("Key", base64.StdEncoding.EncodeToString([]byte(c.devKey))) // 添加自定义头部
+	str := bson.M{
+		"ExeID": Config.ExeID,
+		"DevID": Config.DevID,
+	}
+	marshal, err := json.Marshal(str)
+	if err != nil {
+		return err
+	}
+	header.Set("Data", base64.StdEncoding.EncodeToString(marshal)) // 添加自定义头部
+
 	c.conn, _, err = websocket.DefaultDialer.Dial(c.url, header)
 	if err != nil {
 		log.Fatalln("服务器连接失败")

@@ -16,10 +16,10 @@ func TestAdd(t *testing.T) {
 	DevID := sdk.GetDevID()
 	cfg := sdk.Config{
 		IP:       "127.0.0.1:8810",
-		ExeID:    "65bc7fe8defb0198aac98e3e",
-		Version:  "1.0.3",
+		ExeID:    "67f8bf6a2203dc94ccbab1fd",
+		Version:  "1.0.0",
 		DevID:    DevID,
-		AdminKey: "659f81cbab055be27e95a5ba",
+		AdminKey: "67f8bf3e2203dc94ccbab1fb",
 	}
 	ms := sdk.MspKey{}
 	ms.IsDug = true
