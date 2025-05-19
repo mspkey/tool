@@ -1,6 +1,6 @@
 module github.com/mspkey/tool
 
-go 1.22.2
+go 1.24
 
 require (
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
@@ -8,7 +8,7 @@ require (
 	github.com/satori/go.uuid v1.2.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	go.mongodb.org/mongo-driver v1.16.0
-	golang.org/x/sys v0.22.0
+	golang.org/x/sys v0.33.0
 	gopkg.in/mail.v2 v2.3.1
 )
 

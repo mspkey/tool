@@ -41,9 +41,11 @@ func TestAdd(t *testing.T) {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	fmt.Println(fmt.Sprintf("到期时间为:%s", ms.Info.EndTime))
+	log.Println(fmt.Sprintf("到期时间为:%s", ms.Info.EndTime))
 
-	for true {
+	log.Println(ms.VmpAuth())
+
+	for {
 		time.Sleep(time.Second * 3)
 		log.Println("-->")
 	}

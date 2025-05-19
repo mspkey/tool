@@ -30,11 +30,11 @@ func (c *Hotkeys) AddHotkey(keycode, mod int, Callback func()) {
 // Register 执行热键注册
 func (c *Hotkeys) Register() error {
 	user32 := syscall.NewLazyDLL("user32.dll")
-	reghotkey := user32.NewProc("RegisterHotKey")
+	key := user32.NewProc("RegisterHotKey")
 
 	//注册热键
 	for _, v := range c.list {
-		r1, _, err := reghotkey.Call(
+		r1, _, err := key.Call(
 			0, uintptr(v.Id), uintptr(v.Modifiers), uintptr(v.KeyCode))
 		if r1 == 1 {
 			fmt.Println("热键注册成功:", v)

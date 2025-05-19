@@ -56,7 +56,8 @@ type MspKey struct {
 	IsDug    bool     //是否调试信息输出
 	variable string   //远程变量
 	config   Config
-	isReset  bool //断线重连标志 true 时表示断线重连过了 只针对登录的有效
+	isReset  bool   //断线重连标志 true 时表示断线重连过了 只针对登录的有效
+	license  string //vmp授权
 }
 
 func (c *MspKey) IsLogin() bool {
@@ -222,6 +223,11 @@ func (c *MspKey) onMessage() {
 					if c.IsDug {
 						log.Println(fmt.Sprintf("收到心跳包,心跳次数:%d", Haunt))
 						log.Println(fmt.Sprintf("心跳包数据：%s", c.res.Msg))
+					}
+				case tagVMPAuth:
+					if v, ok := c.res.Data.(map[string]any); ok {
+						ps := v["License"]
+						c.license = ps.(string)
 					}
 				}
 
@@ -556,6 +562,24 @@ func (c *MspKey) QuickLogin() error {
 		time.Sleep(time.Second * 3)
 		index++
 	}
+}
+
+// VmpAuth VMP授权下发
+func (c *MspKey) VmpAuth() (string, error) {
+	c.ClearRes()
+	err := c.auth()
+	if err != nil {
+		return "", err
+	}
+	var p sendJson
+	p.Type = tagVMPAuth
+	p.Data = bson.M{"HardwareId": c.config.DevID}
+	c.sendData(p)
+	err = c.aWaitRes(p.Type)
+	if err != nil {
+		return "", err
+	}
+	return c.license, nil
 }
 
 // safe 保护自身
