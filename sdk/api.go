@@ -271,8 +271,8 @@ func (c *MspKey) Init(Config Config) error {
 	header := http.Header{}
 	header.Set("Key", base64.StdEncoding.EncodeToString([]byte(c.devKey))) // 添加自定义头部
 	str := bson.M{
-		"ExeID": Config.ExeID,
-		"DevID": Config.DevID,
+		"ExeID": c.config.ExeID,
+		"DevID": c.config.DevID,
 	}
 	marshal, err := json.Marshal(str)
 	if err != nil {
@@ -312,6 +312,15 @@ func (c *MspKey) RestConn() {
 		time.Sleep(time.Second * 3)
 		header := http.Header{}
 		header.Set("Key", base64.StdEncoding.EncodeToString([]byte(c.devKey))) // 添加自定义头部
+		str := bson.M{
+			"ExeID": c.config.ExeID,
+			"DevID": c.config.DevID,
+		}
+		marshal, err := json.Marshal(str)
+		if err != nil {
+			return
+		}
+		header.Set("Data", base64.StdEncoding.EncodeToString(marshal)) // 添加自定义头部
 		c.conn, _, err = websocket.DefaultDialer.Dial(c.url, header)
 
 		if err != nil {
