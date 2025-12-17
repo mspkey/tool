@@ -1,8 +1,10 @@
+
 package test
 
+import "testing"
 
+func TestOps(t *testing.T) {
 
-func TestAdd(t *testing.T) {
 
 
 

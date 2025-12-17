@@ -60,3 +60,32 @@ func ClearScreen() {
 func ClearLastLine() {
 	fmt.Print("\033[F\033[K") // ANSI escape code to move the cursor up one line and clear the line
 }
+
+// CompareVersions 版本号对比是否一样 true=一样
+func CompareVersions(LocalVersion, RemoteVersion string) bool {
+	var LocalZbb, LocalCbb, LocalXbb int //本地版本
+	var RemoteZbb, RemoteCbb, RemoteXbb int
+
+	_, err := fmt.Sscanf(LocalVersion, "v%d.%d.%d", &LocalZbb, &LocalCbb, &LocalXbb)
+	if err != nil {
+		return true
+	}
+	_, err = fmt.Sscanf(RemoteVersion, "v%d.%d.%d", &RemoteZbb, &RemoteCbb, &RemoteXbb)
+	if err != nil {
+		return true
+	}
+
+	//主版本号对比
+	if LocalZbb < RemoteZbb {
+		return false
+	}
+	//次版本号对比
+	if LocalCbb < RemoteCbb {
+		return false
+	}
+	//小版本号对比
+	if LocalXbb < RemoteXbb {
+		return false
+	}
+	return true
+}

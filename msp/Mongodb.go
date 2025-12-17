@@ -27,8 +27,8 @@ func (c *MongoDB) SetDB(url string) error {
 	//	return errors.New("数据库连接失败")
 	//}
 	clientOptions := options.Client().ApplyURI(url)
-	clientOptions.SetMaxPoolSize(100)                 // 设置最大连接数
-	clientOptions.SetMinPoolSize(10)                   // 设置最小连接数
+	clientOptions.SetMaxPoolSize(1000)                // 设置最大连接数
+	clientOptions.SetMinPoolSize(50)                  // 设置最小连接数
 	clientOptions.SetConnectTimeout(50 * time.Second) // 设置连接超时时间
 	client, err := mongo.Connect(context.Background(), clientOptions)
 	if err != nil {
@@ -133,6 +133,16 @@ func (c *MongoDB) FindMany(collection string, find interface{}, limit, skip int6
 
 	opts := options.Find().SetLimit(limit).SetSkip(skip)
 	one, err := c.Client.Database(c.database).Collection(collection).Find(c.Ctx, find, opts)
+	err = one.All(c.Ctx, Data)
+	if err != nil {
+		return errors.New("数据不存在")
+	}
+	return nil
+}
+
+// FindManyOpt 查询多个信息,附加查询条件
+func (c *MongoDB) FindManyOpt(collection string, find interface{}, Data interface{}, findOptions *options.FindOptions) error {
+	one, err := c.Client.Database(c.database).Collection(collection).Find(c.Ctx, find, findOptions)
 	err = one.All(c.Ctx, Data)
 	if err != nil {
 		return errors.New("数据不存在")
