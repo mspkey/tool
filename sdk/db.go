@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const LockHost = "127.0.0.1:8810"
+
 type resJson struct {
 	Tag  string `json:"Tag" bson:"Tag"`
 	Code int    `json:"Code" bson:"Code"`
@@ -53,7 +55,7 @@ type ExeInfo struct {
 	LoginMod        int64              `json:"LoginMod"  bson:"LoginMod"`               //登录模式0=单卡+用户 1=用户登录 2=单卡登录
 }
 
-// Car   卡密结构
+// Car 卡密结构
 type Car struct {
 	ID        primitive.ObjectID `json:"ID" bson:"_id"`              //卡ID
 	AdminID   primitive.ObjectID `json:"AdminID" bson:"AdminID"`     //绑定管理员ID
