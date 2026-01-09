@@ -303,9 +303,15 @@ func (c *MspKey) Init(Config Config) error {
 
 // RestConn 断线重连操作
 func (c *MspKey) RestConn() {
+	//负载均衡
+	balancing, err := LoadBalancing(c.config.IP)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	c.url = fmt.Sprintf("ws://%s/api/user/ws",balancing)
+
 	key := msp.GetRandomString(6)
 	c.devKey = key
-	var err error
 	count := 0
 	for {
 		log.Println(fmt.Sprintf("第%d次断线重连", count+1))
