@@ -26,8 +26,8 @@ func GetDevID() string {
 //go:embed dist/*
 var staticFS embed.FS
 
-// ProxyApi 后端转发并启动UI
-func ProxyApi(proxyIP string) {
+// clientUI 后端转发并启动UI
+func clientUI(proxyIP string) {
 
 	//判断是否带有http标识
 	if !strings.Contains(proxyIP, "http") {
@@ -87,8 +87,8 @@ func ProxyApi(proxyIP string) {
 	}
 }
 
-// PingServer 检测服务器是否可用
-func PingServer(IP string) error {
+// pingServer 检测服务器是否可用
+func pingServer(IP string) error {
 	resp, err := http.Post("http://"+IP+"/ping", "application/json", nil)
 	if err != nil {
 		return err
@@ -114,8 +114,8 @@ func ResolveIP(str string) (string, error) {
 	return ips[0].String(), nil
 }
 
-// LoadBalancing 负载均衡
-func LoadBalancing(IP string) (string, error) {
+// loadBalancing 负载均衡
+func loadBalancing(IP string) (string, error) {
 	//判断是否群主服务器
 	if IP != LockHost {
 		return IP, nil
@@ -130,7 +130,7 @@ func LoadBalancing(IP string) (string, error) {
 			continue
 		}
 
-		err = PingServer(tempIp + ":8810")
+		err = pingServer(tempIp + ":8810")
 		if err == nil {
 			return tempIp + ":8810", nil
 		}

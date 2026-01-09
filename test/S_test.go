@@ -6,10 +6,10 @@ import (
 	"github.com/mspkey/tool/sdk"
 	"log"
 	"testing"
-	"time"
 )
 
 func TestOps(t *testing.T) {
+	Start()
 
 }
 
@@ -23,20 +23,9 @@ func Start() {
 		DevID:    DevID,
 		AdminKey: "646e0cdba20867821d3cc050",
 	}
-	//负载均衡
-	balancing, err := sdk.LoadBalancing(cfg.IP)
-	if err != nil {
-		log.Fatal(err)
-	}
-	//启动本地UI服务
-	go func() {
-		sdk.ProxyApi(balancing)
-	}()
-
-	time.Sleep(2 * time.Second)
 
 	ms := sdk.MspKey{}
-	err = ms.Init(cfg)
+	err := ms.Init(cfg)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -55,4 +44,7 @@ func Start() {
 		log.Fatalln(err)
 	}
 	log.Println(fmt.Sprintf("到期时间为:%s", ms.Info.EndTime))
+
+	select {}
+
 }

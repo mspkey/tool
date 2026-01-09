@@ -58,6 +58,7 @@ type MspKey struct {
 	config   Config
 	isReset  bool   //断线重连标志 true 时表示断线重连过了 只针对登录的有效
 	license  string //vmp授权
+	isAdmin  bool   //是否群主服务器
 }
 
 func (c *MspKey) IsLogin() bool {
@@ -105,9 +106,11 @@ func (c *MspKey) onMessage() {
 			c.state = false
 			log.Println("服务器断开连接")
 			//进行断线重连
-			if c.isReset {
+			if c.isReset && c.isLogin {
 				log.Println("断线重连中....")
 				go c.RestConn()
+			} else {
+				log.Fatalln("尚未登录,程序结束")
 			}
 			return
 		}
@@ -261,10 +264,22 @@ func (c *MspKey) sendData(data sendJson) {
 // Init 验证初始化 ok
 func (c *MspKey) Init(Config Config) error {
 	c.config = Config
+	//判断是否群主服务器
+	if c.config.IP == LockHost {
+		c.isAdmin = true
+	}
+	//负载均衡
+	balancing, err := loadBalancing(c.config.IP)
+	if err != nil {
+		log.Fatalln(err)
+	} else {
+		c.config.IP = balancing
+	}
+
+	c.url = fmt.Sprintf("ws://%s/api/user/ws", c.config.IP)
 	key := msp.GetRandomString(6)
 	c.devKey = key //默认密钥
-	c.url = fmt.Sprintf("ws://%s/api/user/ws", Config.IP)
-	var err error
+
 	count := 0
 
 	// 创建自定义的 HTTP Header
@@ -303,12 +318,18 @@ func (c *MspKey) Init(Config Config) error {
 
 // RestConn 断线重连操作
 func (c *MspKey) RestConn() {
+
+	//判断是否群主服务器
+	if c.isAdmin {
+		c.config.IP = LockHost
+	}
 	//负载均衡
-	balancing, err := LoadBalancing(c.config.IP)
+	balancing, err := loadBalancing(c.config.IP)
+	c.config.IP = balancing
 	if err != nil {
 		log.Fatalln(err)
 	}
-	c.url = fmt.Sprintf("ws://%s/api/user/ws",balancing)
+	c.url = fmt.Sprintf("ws://%s/api/user/ws", c.config.IP)
 
 	key := msp.GetRandomString(6)
 	c.devKey = key
@@ -553,6 +574,12 @@ func (c *MspKey) ping() {
 
 // QuickLogin 快速登录
 func (c *MspKey) QuickLogin() error {
+	//启动UI
+	go func() {
+		clientUI(c.config.IP)
+	}()
+
+	time.Sleep(2 * time.Second)
 	//打开网页
 	url := fmt.Sprintf("http://localhost:8810/ms/#/WebLogin?DevKey=%s", c.devKey)
 	_ = msp.OpenBrowser(url)
