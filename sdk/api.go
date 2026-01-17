@@ -319,6 +319,9 @@ func (c *MspKey) Init(Config Config) error {
 // RestConn 断线重连操作
 func (c *MspKey) RestConn() {
 
+	//等待30-60秒
+	t := msp.RandomInt(30, 60)
+	time.Sleep(time.Duration(t))
 	//判断是否群主服务器
 	if c.isAdmin {
 		c.config.IP = LockHost
