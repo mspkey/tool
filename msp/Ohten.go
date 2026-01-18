@@ -3,10 +3,12 @@ package msp
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 )
 
 func OpenBrowser(url string) error {
@@ -88,4 +90,12 @@ func CompareVersions(LocalVersion, RemoteVersion string) bool {
 		return false
 	}
 	return true
+}
+
+
+// RandomInt 取一个随机数
+func RandomInt(min, max int) int {
+	// 创建新的随机数生成器，使用当前时间作为种子
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return min + r.Intn(max-min+1)
 }
