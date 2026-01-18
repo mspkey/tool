@@ -89,7 +89,7 @@ func clientUI(proxyIP string) {
 
 // pingServer 检测服务器是否可用
 func pingServer(IP string) error {
-	resp, err := http.Post("http://"+IP+"/ping", "application/json", nil)
+	resp, err := http.Get("http://" + IP + "/ping")
 	if err != nil {
 		return err
 	}
@@ -119,6 +119,18 @@ func loadBalancing(IP string) (string, error) {
 	//判断是否群主服务器
 	if IP != LockHost {
 		return IP, nil
+	}
+
+	ipTemp := "gf.mspoint.xyz:8810"
+	err := pingServer(ipTemp)
+	if err == nil {
+		return ipTemp, nil
+	}
+
+	ipTemp = "v1.msplock.vip:8810"
+	err = pingServer(ipTemp)
+	if err == nil {
+		return ipTemp, nil
 	}
 
 	var IpList = []string{"v1.msplock.vip", "v2.msplock.vip", "v3.msplock.vip", "v4.msplock.vip", "v5.msplock.vip", "v6.msplock.vip"}
