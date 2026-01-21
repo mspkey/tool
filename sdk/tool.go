@@ -29,11 +29,17 @@ var staticFS embed.FS
 // clientUI 后端转发并启动UI
 func clientUI(proxyIP string) {
 
-	//判断是否带有http标识
-	if !strings.Contains(proxyIP, "http") {
-		proxyIP = "http://" + proxyIP
+	//判断是否包含":443"端口
+	if strings.Contains(proxyIP, ":443") {
+		if !strings.Contains(proxyIP, "https") {
+			proxyIP = "https://" + proxyIP
+		}
+	} else {
+		//判断是否带有http标识
+		if !strings.Contains(proxyIP, "http") {
+			proxyIP = "http://" + proxyIP
+		}
 	}
-
 	// 目标服务器地址
 	targetURL, err := url.Parse(proxyIP)
 	if err != nil {
@@ -89,7 +95,12 @@ func clientUI(proxyIP string) {
 
 // pingServer 检测服务器是否可用
 func pingServer(IP string) error {
-	resp, err := http.Get("http://" + IP + "/ping")
+	URL := "http://" + IP + "/ping"
+	if strings.Contains(IP, ":443") {
+		URL = "https://" + IP + "/ping"
+	}
+
+	resp, err := http.Get(URL)
 	if err != nil {
 		return err
 	}
@@ -121,7 +132,7 @@ func loadBalancing(IP string) (string, error) {
 		return IP, nil
 	}
 
-	ipTemp := "gf.mspoint.xyz:8810"
+	ipTemp := "v1.msplock.vip:443"
 	err := pingServer(ipTemp)
 	if err == nil {
 		return ipTemp, nil
@@ -133,7 +144,7 @@ func loadBalancing(IP string) (string, error) {
 		return ipTemp, nil
 	}
 
-	var IpList = []string{"v1.msplock.vip", "v2.msplock.vip", "v3.msplock.vip", "v4.msplock.vip", "v5.msplock.vip", "v6.msplock.vip"}
+	var IpList = []string{"v2.msplock.vip", "v3.msplock.vip", "v4.msplock.vip", "v5.msplock.vip", "v6.msplock.vip", "v7.msplock.vip"}
 	//判断服务器状态
 	for _, item := range IpList {
 		//解析域名变IP

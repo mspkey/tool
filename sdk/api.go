@@ -261,26 +261,17 @@ func (c *MspKey) sendData(data sendJson) {
 
 }
 
-// Init 验证初始化 ok
-func (c *MspKey) Init(Config Config) error {
-	c.config = Config
-	//判断是否群主服务器
-	if c.config.IP == LockHost {
-		c.isAdmin = true
-	}
-	//负载均衡
-	balancing, err := loadBalancing(c.config.IP)
-	if err != nil {
-		log.Fatalln(err)
+// connectServer 连接服务器
+func (c *MspKey) connectServer() error {
+
+	if strings.Contains(c.config.IP, ":443") {
+		c.url = fmt.Sprintf("wss://%s/api/user/ws", c.config.IP)
 	} else {
-		c.config.IP = balancing
+		c.url = fmt.Sprintf("ws://%s/api/user/ws", c.config.IP)
 	}
 
-	c.url = fmt.Sprintf("ws://%s/api/user/ws", c.config.IP)
 	key := msp.GetRandomString(6)
 	c.devKey = key //默认密钥
-
-	count := 0
 
 	// 创建自定义的 HTTP Header
 	header := http.Header{}
@@ -302,6 +293,7 @@ func (c *MspKey) Init(Config Config) error {
 	log.Println("服务器连接成功")
 	go c.onMessage()
 
+	count := 0
 	for {
 		if c.devKey != key {
 			c.isReset = true
@@ -313,7 +305,27 @@ func (c *MspKey) Init(Config Config) error {
 		count++
 		time.Sleep(time.Second)
 	}
+}
 
+// Init 验证初始化 ok
+func (c *MspKey) Init(Config Config) error {
+	c.config = Config
+	//判断是否群主服务器
+	if c.config.IP == LockHost {
+		c.isAdmin = true
+	}
+	//负载均衡
+	balancing, err := loadBalancing(c.config.IP)
+	if err != nil {
+		log.Fatalln(err)
+	} else {
+		c.config.IP = balancing
+	}
+	err = c.connectServer()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // RestConn 断线重连操作
@@ -328,31 +340,17 @@ func (c *MspKey) RestConn() {
 	}
 	//负载均衡
 	balancing, err := loadBalancing(c.config.IP)
-	c.config.IP = balancing
 	if err != nil {
 		log.Fatalln(err)
+	} else {
+		c.config.IP = balancing
 	}
-	c.url = fmt.Sprintf("ws://%s/api/user/ws", c.config.IP)
 
-	key := msp.GetRandomString(6)
-	c.devKey = key
 	count := 0
 	for {
 		log.Println(fmt.Sprintf("第%d次断线重连", count+1))
 		time.Sleep(time.Second * 3)
-		header := http.Header{}
-		header.Set("Key", base64.StdEncoding.EncodeToString([]byte(c.devKey))) // 添加自定义头部
-		str := bson.M{
-			"ExeID": c.config.ExeID,
-			"DevID": c.config.DevID,
-		}
-		marshal, err := json.Marshal(str)
-		if err != nil {
-			return
-		}
-		header.Set("Data", base64.StdEncoding.EncodeToString(marshal)) // 添加自定义头部
-		c.conn, _, err = websocket.DefaultDialer.Dial(c.url, header)
-
+		err = c.connectServer()
 		if err != nil {
 			if count > 200 {
 				log.Fatalln("断线重连失败")
@@ -364,27 +362,21 @@ func (c *MspKey) RestConn() {
 		break
 	}
 
-	go c.onMessage()
-
 	//需要ck自动登录
 	time.Sleep(time.Second)
 	for {
-		if c.devKey != key {
-			if c.Info.Name != "" {
-				err = c.CkLogin(c.Info.ID.Hex())
-				if err != nil {
-					log.Fatalln(err)
-				} else {
-					log.Println("自动登录成功")
-					break
-				}
+		if c.Info.Name != "" {
+			err = c.CkLogin(c.Info.ID.Hex())
+			if err != nil {
+				log.Fatalln(err)
 			} else {
-				log.Fatalln("尚未登录")
+				log.Println("自动登录成功")
+				break
 			}
-
+		} else {
+			log.Fatalln("尚未登录")
 		}
 	}
-
 }
 
 // GetExeInfo 获取软件基本信息 ok

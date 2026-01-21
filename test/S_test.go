@@ -3,17 +3,13 @@ package test
 import (
 	"errors"
 	"fmt"
-	"github.com/mspkey/tool/msp"
 	"github.com/mspkey/tool/sdk"
 	"log"
 	"testing"
 )
 
 func TestOps(t *testing.T) {
-	for i := 0; i < 30; i++ {
-		t1 := msp.RandomInt(30, 60)
-		fmt.Println(t1)
-	}
+	Start()
 
 }
 
