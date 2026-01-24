@@ -3,6 +3,7 @@ package sdk
 import (
 	"embed"
 	"errors"
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/mspkey/tool/msp"
 	"io"
@@ -52,6 +53,26 @@ func clientUI(proxyIP string) {
 		req.URL.Scheme = targetURL.Scheme
 		req.URL.Host = targetURL.Host
 		req.Host = targetURL.Host
+
+		// ===== 核心修改：传递真实客户端 IP 头 =====
+		// 1. 获取真实客户端的 IP（从 Gin 上下文的 Request 中取）
+		clientIP := req.RemoteAddr
+		// 去掉端口（比如 "192.168.1.100:54321" → "192.168.1.100"）
+		if idx := strings.LastIndex(clientIP, ":"); idx != -1 {
+			clientIP = clientIP[:idx]
+		}
+
+		// 2. 设置 X-Real-IP 头（传递真实客户端 IP）
+		req.Header.Set("X-Real-IP", clientIP)
+
+		// 3. 设置 X-Forwarded-For 头（拼接 IP 链）
+		xff := req.Header.Get("X-Forwarded-For")
+		if xff != "" {
+			xff = fmt.Sprintf("%s, %s", xff, clientIP)
+		} else {
+			xff = clientIP
+		}
+		req.Header.Set("X-Forwarded-For", xff)
 	}
 
 	// 配置Gin
@@ -139,6 +160,18 @@ func loadBalancing(IP string) (string, error) {
 	}
 
 	ipTemp = "v1.msplock.vip:8810"
+	err = pingServer(ipTemp)
+	if err == nil {
+		return ipTemp, nil
+	}
+
+	ipTemp = "gf.mspoint.xyz:443"
+	err = pingServer(ipTemp)
+	if err == nil {
+		return ipTemp, nil
+	}
+
+	ipTemp = "gf.mspoint.xyz:8810"
 	err = pingServer(ipTemp)
 	if err == nil {
 		return ipTemp, nil

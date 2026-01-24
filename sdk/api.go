@@ -325,6 +325,7 @@ func (c *MspKey) Init(Config Config) error {
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
