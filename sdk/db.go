@@ -42,6 +42,8 @@ type ExeInfo struct {
 	Md5             string             `json:"Md5"  bson:"Md5"`                         //软件MD5
 	Data            string             `json:"Data"  bson:"Data"`                       //软件核心数据
 	Key             string             `json:"Key"  bson:"Key"`                         //密钥
+	IsWebLogin      bool               `json:"IsWebLogin" bson:"IsWebLogin"`            //是否使用网页登录
+	IsSafeQuit      bool               `json:"IsSafeQuit" bson:"IsSafeQuit"`            //是否安全退出
 	IsDK            bool               `json:"IsDK"  bson:"IsDK"`                       //是否多开
 	IsReg           bool               `json:"IsReg"  bson:"IsReg"`                     //是否允许注册
 	IsDbg           bool               `json:"IsDbg"  bson:"IsDbg"`                     //是否开启检测
