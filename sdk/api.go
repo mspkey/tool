@@ -345,13 +345,16 @@ func (c *MspKey) RestConn() {
 		c.config.IP = balancing
 	}
 
-	count := 0
+	count := 3
 	for {
 		log.Println(fmt.Sprintf("第%d次断线重连", count+1))
-		time.Sleep(time.Second * 3)
+		time.Sleep(time.Second * time.Duration(count))
 		err = c.connectServer()
 		if err != nil {
-			if count > 200 {
+			if count > 360 {
+				if c.Exe.IsSafeQuit {
+					return
+				}
 				log.Fatalln("断线重连失败")
 			}
 			count++
