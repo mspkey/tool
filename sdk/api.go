@@ -261,7 +261,7 @@ func (c *MspKey) sendData(data sendJson) {
 
 }
 
-// connectServer 连接服务器
+// connectServer 连接服务器 内部不能包含结束程序指令
 func (c *MspKey) connectServer() error {
 
 	if strings.Contains(c.config.IP, ":443") {
@@ -288,11 +288,10 @@ func (c *MspKey) connectServer() error {
 
 	c.conn, _, err = websocket.DefaultDialer.Dial(c.url, header)
 	if err != nil {
-		log.Fatalln("服务器连接失败")
+		return errors.New("服务器连接失败")
 	}
-	log.Println("服务器连接成功")
-	go c.onMessage()
 
+	go c.onMessage()
 	count := 0
 	for {
 		if c.devKey != key {
@@ -325,7 +324,6 @@ func (c *MspKey) Init(Config Config) error {
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
 
