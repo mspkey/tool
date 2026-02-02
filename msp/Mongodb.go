@@ -3,9 +3,9 @@ package msp
 import (
 	"context"
 	"errors"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"time"
 )
 
@@ -19,18 +19,11 @@ type MongoDB struct {
 // SetDB 初始化数据库 前置条件 需要设置数据库 url
 func (c *MongoDB) SetDB(url string) error {
 	c.Ctx = context.Background()
-	// Set the version of the Versioned API on the client.
-	//serverAPIOptions := options.ServerAPI(options.ServerAPIVersion("5"))
-	//clientOptions := options.Client().ApplyURI(url).SetServerAPIOptions(serverAPIOptions)
-	//client, err := mongo.Connect(c.Ctx, clientOptions)
-	//if err != nil {
-	//	return errors.New("数据库连接失败")
-	//}
 	clientOptions := options.Client().ApplyURI(url)
 	clientOptions.SetMaxPoolSize(1000)                // 设置最大连接数
 	clientOptions.SetMinPoolSize(50)                  // 设置最小连接数
 	clientOptions.SetConnectTimeout(50 * time.Second) // 设置连接超时时间
-	client, err := mongo.Connect(context.Background(), clientOptions)
+	client, err := mongo.Connect(clientOptions)
 	if err != nil {
 		return errors.New("数据库连接失败")
 	}
@@ -141,8 +134,11 @@ func (c *MongoDB) FindMany(collection string, find interface{}, limit, skip int6
 }
 
 // FindManyOpt 查询多个信息,附加查询条件
-func (c *MongoDB) FindManyOpt(collection string, find interface{}, Data interface{}, findOptions *options.FindOptions) error {
+func (c *MongoDB) FindManyOpt(collection string, find interface{}, Data interface{}, findOptions *options.FindOptionsBuilder) error {
 	one, err := c.Client.Database(c.database).Collection(collection).Find(c.Ctx, find, findOptions)
+	if err != nil {
+		return err
+	}
 	err = one.All(c.Ctx, Data)
 	if err != nil {
 		return errors.New("数据不存在")

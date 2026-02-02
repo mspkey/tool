@@ -2,7 +2,7 @@ package msp
 
 import (
 	"encoding/json"
-	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"io/ioutil"
 	"os"
 )
@@ -10,7 +10,7 @@ import (
 type File struct {
 }
 
-//ReadTxt 文件读取 path:路径  适合小文件读取123
+// ReadTxt 文件读取 path:路径  适合小文件读取123
 func (c *File) ReadTxt(path string) (str string, err error) {
 
 	op, err := os.Open(path)
@@ -24,7 +24,7 @@ func (c *File) ReadTxt(path string) (str string, err error) {
 	return
 }
 
-//WriteJson 写入json配置文件
+// WriteJson 写入json配置文件
 func (c *File) WriteJson(path string, str map[string]interface{}) error {
 
 	//创建文件（并打开）
@@ -45,7 +45,7 @@ func (c *File) WriteJson(path string, str map[string]interface{}) error {
 	return nil
 }
 
-//ReadConFig  读取配置文件
+// ReadConFig  读取配置文件
 func (c *File) ReadConFig(path string) (bson.M, error) {
 	file, err := ioutil.ReadFile(path)
 	if err != nil {

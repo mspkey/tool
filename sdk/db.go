@@ -1,7 +1,7 @@
 package sdk
 
 import (
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"time"
 )
 
@@ -32,8 +32,8 @@ type Config struct {
 
 // ExeInfo 软件
 type ExeInfo struct {
-	ID              primitive.ObjectID `json:"ID" bson:"_id"`                           //软件ID
-	AdminID         primitive.ObjectID `json:"AdminID"  bson:"AdminID"`                 //绑定管理员ID
+	ID              bson.ObjectID      `json:"ID" bson:"_id"`                           //软件ID
+	AdminID         bson.ObjectID `json:"AdminID"  bson:"AdminID"`                 //绑定管理员ID
 	Title           string             `json:"Title"  bson:"Title"`                     //软件标题
 	Versions        string             `json:"Versions"  bson:"Versions"`               //版本
 	State           bool               `json:"State"  bson:"State"`                     //状态 正常/禁用
@@ -59,9 +59,9 @@ type ExeInfo struct {
 
 // Car 卡密结构
 type Car struct {
-	ID        primitive.ObjectID `json:"ID" bson:"_id"`              //卡ID
-	AdminID   primitive.ObjectID `json:"AdminID" bson:"AdminID"`     //绑定管理员ID
-	ExeID     primitive.ObjectID `json:"ExeID" bson:"ExeID"`         //软件ID
+	ID        bson.ObjectID `json:"ID" bson:"_id"`              //卡ID
+	AdminID   bson.ObjectID `json:"AdminID" bson:"AdminID"`     //绑定管理员ID
+	ExeID     bson.ObjectID `json:"ExeID" bson:"ExeID"`         //软件ID
 	Serial    string             `json:"Serial" bson:"Serial"`       //卡号
 	State     bool               `json:"State" bson:"State"`         //状态 正常/禁用
 	TyCar     int64              `json:"TyCar" bson:"TyCar"`         //卡密类型  0=小时卡 1=天卡 2=周卡 3=月卡 4=季卡 5=半年卡 6=年卡 7=永久卡
@@ -74,12 +74,12 @@ type Car struct {
 
 // UserInfo 用户
 type UserInfo struct {
-	ID            primitive.ObjectID `json:"ID" bson:"_id"`                      //用户ID
-	AdminID       primitive.ObjectID `json:"AdminID" bson:"AdminID"`             //管理员ID
-	AgentID       primitive.ObjectID `json:"AgentID" bson:"AgentID"`             //代理ID
+	ID            bson.ObjectID `json:"ID" bson:"_id"`                      //用户ID
+	AdminID       bson.ObjectID `json:"AdminID" bson:"AdminID"`             //管理员ID
+	AgentID       bson.ObjectID `json:"AgentID" bson:"AgentID"`             //代理ID
 	DeviceID      string             `json:"DeviceID" bson:"DeviceID"`           //设备ID
 	DkCount       int64              `json:"DkCount" bson:"DkCount"`             //多开数量设定0=无限多开 默认为3 最大为100
-	ExeID         primitive.ObjectID `json:"ExeID" bson:"ExeID"`                 //绑定的软件
+	ExeID         bson.ObjectID `json:"ExeID" bson:"ExeID"`                 //绑定的软件
 	Name          string             `json:"Name" bson:"Name"`                   //用户名
 	Pwd           string             `json:"Pwd" bson:"Pwd"`                     //密码
 	Level         int64              `json:"Level" bson:"Level"`                 //用户等级 0=小时卡 1=天卡 2=周卡 3=月卡 4=季卡 5=半年卡 6=年卡 7=永久卡

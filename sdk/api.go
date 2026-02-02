@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"github.com/gorilla/websocket"
 	"github.com/mspkey/tool/msp"
-	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"log"
 	"net/http"
 	"os"
