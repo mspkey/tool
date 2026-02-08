@@ -6,6 +6,7 @@ import (
 	"github.com/mspkey/tool/sdk"
 	"log"
 	"testing"
+	"time"
 )
 
 func TestOps(t *testing.T) {
@@ -17,23 +18,29 @@ func TestOps(t *testing.T) {
 func Start() {
 	DevID := sdk.GetDevID()
 	cfg := sdk.Config{
-		IP:       sdk.LockHost,
-		ExeID:    "65bc7fe8defb0198aac98e3e",
-		Version:  "1.0.3",
+		IP:       "127.0.0.1:8820",
+		ExeID:    "697dd630de1185188b262145",
+		Version:  "1.0.0",
 		DevID:    DevID,
-		AdminKey: "646e0cdba20867821d3cc050",
+		AdminKey: "697dd606de1185188b262142",
 	}
 
 	ms := sdk.MspKey{}
+	//ms.IsDug = true
 	err := ms.Init(cfg)
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	err = ms.QuickLogin()
+	err = ms.CarLogin("8d6e5a78-4535-481f-ab75-f793f8685cc3")
 	if err != nil {
 		log.Fatalln(err)
 	}
+
+	//err = ms.QuickLogin()
+	//if err != nil {
+	//	log.Fatalln(err)
+	//}
 
 	if !ms.IsLogin() {
 		log.Fatalln(errors.New("尚未登录"))
@@ -45,6 +52,6 @@ func Start() {
 	}
 	log.Println(fmt.Sprintf("到期时间为:%s", ms.Info.EndTime))
 
-	select {}
+	time.Sleep(1 * time.Hour)
 
 }

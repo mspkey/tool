@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -45,20 +46,22 @@ func rc4DecodeString(key string, Base64Data string) ([]byte, error) {
 }
 
 type MspKey struct {
-	url      string //连接URL
-	conn     *websocket.Conn
-	state    bool     //服务器是否连接成功
-	res      resJson  //返回的源数据
-	Info     UserInfo //用户自身信息
-	Exe      ExeInfo  //用户绑定的软件
-	devKey   string   //通讯密钥
-	isLogin  bool     //是否登录
-	IsDug    bool     //是否调试信息输出
-	variable string   //远程变量
-	config   Config
-	isReset  bool   //断线重连标志 true 时表示断线重连过了 只针对登录的有效
-	license  string //vmp授权
-	isAdmin  bool   //是否群主服务器
+	url       string //连接URL
+	conn      *websocket.Conn
+	isCoon    bool         //服务器是否连接成功
+	res       chan resJson //返回的源数据
+	Info      UserInfo     //用户自身信息
+	Exe       ExeInfo      //用户绑定的软件
+	devKey    string       //通讯密钥
+	isLogin   bool         //是否登录
+	IsDug     bool         //是否调试信息输出
+	variable  string       //远程变量
+	config    Config       //配置
+	isReset   bool         //断线重连标志 true 时表示断线重连过了 只针对登录的有效
+	license   string       //vmp授权
+	isAdmin   bool         //是否群主服务器
+	writeLock sync.Mutex   //写入锁
+	quitHart  chan bool    //退出心跳包
 }
 
 func (c *MspKey) IsLogin() bool {
@@ -73,37 +76,13 @@ func (c *MspKey) auth() error {
 	return nil
 }
 
-// ClearRes 清空接受信息
-func (c *MspKey) ClearRes() {
-	c.res = resJson{}
-}
-
-// aWaitRes 等待返回
-func (c *MspKey) aWaitRes(Tag string) error {
-	count := 0
-	for {
-		time.Sleep(time.Millisecond * 300)
-		if c.res.Tag == Tag {
-			if c.res.Code == 0 {
-				return errors.New(c.res.Msg)
-			} else {
-				return nil
-			}
-		}
-		if count > 30 {
-			return errors.New("超时")
-		}
-		count++
-	}
-}
-
 // GetData 服务器消息返回事件
 func (c *MspKey) onMessage() {
 	Haunt := 0
 	for {
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
-			c.state = false
+			c.isCoon = false
 			log.Println("服务器断开连接")
 			//进行断线重连
 			if c.isReset && c.isLogin {
@@ -112,6 +91,7 @@ func (c *MspKey) onMessage() {
 			} else {
 				log.Fatalln("尚未登录,程序结束")
 			}
+			c.quitHart <- true
 			return
 		}
 		res := strings.ReplaceAll(string(msg), "\"", "")
@@ -122,59 +102,42 @@ func (c *MspKey) onMessage() {
 		if c.IsDug {
 			log.Printf("接受数据:<- %s\n", msg)
 		}
-		err = json.Unmarshal(msg, &c.res)
+
+		var data resJson
+
+		err = json.Unmarshal(msg, &data)
 		if err != nil {
 			log.Println("Error:", err)
 			continue
 		}
 
 		//防止攻击回放 用于时间戳判断
-		p, _ := strconv.ParseInt(c.res.Time, 10, 64)
+		p, _ := strconv.ParseInt(data.Time, 10, 64)
 		if p <= time.Now().Unix() {
 			log.Fatalln("校验失败,数据已过期")
 			return
 		}
 
 		//动态密钥替换操作
-		if c.res.Tag == tagDevKey {
-			c.devKey = fmt.Sprintf("%s", c.res.Data)
-			//启动心跳包
-			go func() {
-				err := c.GetExeInfo()
-				if err != nil {
-					log.Fatalln(err)
-				}
-				c.state = true
-				//先发一次心跳包 用于检测版本等信息
-				c.ping()
-				//启动检测
-				go c.safe()
-
-				for {
-					time.Sleep(time.Second * 60)
-					c.ping()
-					if !c.state {
-						return
-					}
-				}
-			}()
+		if data.Tag == tagDevKey {
+			c.devKey = fmt.Sprintf("%s", data.Data)
 			continue
 		}
 
 		//实时消息
-		if c.res.Tag == "SendMsg" && c.res.Code == 1 {
-			log.Println("收到一条实时消息:" + c.res.Msg)
+		if data.Tag == "SendMsg" && data.Code == 1 {
+			log.Println("收到一条实时消息:" + data.Msg)
 			continue
 		}
 
 		//主动下线
-		if c.res.Tag == "OffLine" && c.res.Code == 1 {
-			log.Fatalln(c.res.Msg)
+		if data.Tag == "OffLine" && data.Code == 1 {
+			log.Fatalln(data.Msg)
 			return
 		}
 
 		//是否强制更新
-		if c.res.Tag == "UpDate" && c.res.Code == 0 {
+		if data.Tag == "UpDate" && data.Code == 0 {
 			msp.ClearScreen()
 			log.Println("检测到新版本，请下载新版本")
 			if c.Exe.Address != "" {
@@ -185,24 +148,24 @@ func (c *MspKey) onMessage() {
 		}
 
 		//其他
-		if c.res.Tag != "Null" {
+		if data.Tag != "Null" {
 
 			//数据直接解析到全局变量里
 			go func() {
-				switch c.res.Tag {
+				switch data.Tag {
 				case tagLogin:
 					c.isLogin = true
 				case tagCarLogin:
 					c.isLogin = true
 				case tagExe:
-					if v, ok := c.res.Data.(map[string]any); ok {
+					if v, ok := data.Data.(map[string]any); ok {
 						ps := v["Exe"]
 						marshal, _ := json.Marshal(ps)
 						_ = json.Unmarshal(marshal, &c.Exe)
 					}
 				case tagUserInfo:
 
-					if v, ok := c.res.Data.(map[string]any); ok {
+					if v, ok := data.Data.(map[string]any); ok {
 						ps := v["UserInfo"]
 						marshal, _ := json.Marshal(ps)
 						_ = json.Unmarshal(marshal, &c.Info)
@@ -211,29 +174,30 @@ func (c *MspKey) onMessage() {
 					var st struct {
 						ExeData string
 					}
-					marshal, _ := json.Marshal(c.res.Data)
+					marshal, _ := json.Marshal(data.Data)
 					_ = json.Unmarshal(marshal, &st)
 					c.Exe.Data = st.ExeData
 				case tagVariable:
 					var st struct {
 						ExeData string
 					}
-					marshal, _ := json.Marshal(c.res.Data)
+					marshal, _ := json.Marshal(data.Data)
 					_ = json.Unmarshal(marshal, &st)
 					c.variable = st.ExeData
 				case tagPing:
 					Haunt++
 					if c.IsDug {
 						log.Println(fmt.Sprintf("收到心跳包,心跳次数:%d", Haunt))
-						log.Println(fmt.Sprintf("心跳包数据：%s", c.res.Msg))
+						log.Println(fmt.Sprintf("心跳包数据：%s", data.Msg))
 					}
 				case tagVMPAuth:
-					if v, ok := c.res.Data.(map[string]any); ok {
+					if v, ok := data.Data.(map[string]any); ok {
 						ps := v["License"]
 						c.license = ps.(string)
 					}
 				}
 
+				c.res <- data
 			}()
 
 		}
@@ -243,11 +207,13 @@ func (c *MspKey) onMessage() {
 }
 
 // sendData 发送数据
-func (c *MspKey) sendData(data sendJson) {
-	data.Time = fmt.Sprintf("%d", time.Now().Unix())
-	marshal, err := json.Marshal(data)
+func (c *MspKey) sendData(send sendJson) error {
+	c.writeLock.Lock()
+	defer c.writeLock.Unlock()
+	send.Time = fmt.Sprintf("%d", time.Now().Unix())
+	marshal, err := json.Marshal(send)
 	if err != nil {
-		return
+		return err
 	}
 	if c.IsDug {
 		log.Println("发送数据:->" + string(marshal))
@@ -256,7 +222,28 @@ func (c *MspKey) sendData(data sendJson) {
 	msg := rc4EncryptString(c.devKey, string(marshal))
 	err = c.conn.WriteMessage(1, []byte(msg))
 	if err != nil {
-		return
+		return err
+	}
+	//这边需要等待的返回以免数据错乱
+	count := 0
+	for {
+		time.Sleep(time.Millisecond * 300)
+		select {
+		case temp := <-c.res:
+			if temp.Tag == send.Type {
+				if temp.Code == 0 {
+					return errors.New(temp.Msg)
+				} else {
+					return nil
+				}
+			}
+		case <-time.After(time.Second * 1):
+			if count > 5 {
+				return errors.New("等待超时")
+			}
+			count++
+		}
+
 	}
 
 }
@@ -296,6 +283,33 @@ func (c *MspKey) connectServer() error {
 	for {
 		if c.devKey != key {
 			c.isReset = true
+			//启动心跳包
+			go func() {
+				err := c.GetExeInfo()
+				if err != nil {
+					log.Fatalln(err)
+				}
+				//服务器链接成功
+				c.isCoon = true
+				//先发一次心跳包 用于检测版本等信息
+				c.ping()
+				//启动检测
+				go c.safe()
+				for {
+					select {
+					case <-c.quitHart:
+						if c.IsDug {
+							log.Println("退出心跳包")
+						}
+						return
+					case <-time.After(time.Second * 60):
+						if c.isCoon {
+							c.ping()
+						}
+					}
+
+				}
+			}()
 			return nil
 		}
 		if count > 10 {
@@ -320,10 +334,18 @@ func (c *MspKey) Init(Config Config) error {
 	} else {
 		c.config.IP = balancing
 	}
+
+	if c.res == nil {
+		c.res = make(chan resJson, 1)
+	}
+	if c.quitHart == nil {
+		c.quitHart = make(chan bool, 1)
+	}
 	err = c.connectServer()
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -383,41 +405,37 @@ func (c *MspKey) RestConn() {
 
 // GetExeInfo 获取软件基本信息 ok
 func (c *MspKey) GetExeInfo() error {
-	c.ClearRes()
+
 	var p sendJson
 	p.Type = tagExe
-	c.sendData(p)
-	return c.aWaitRes(p.Type)
+	return c.sendData(p)
 }
 
 // Register 用户注册 ok
 func (c *MspKey) Register(Name, Pwd, Code string) error {
-	c.ClearRes()
+
 	var p sendJson
 	p.Type = tagRegister
 	p.Data = bson.M{"Name": Name, "Pwd": Pwd, "Code": Code}
-	c.sendData(p)
-	return c.aWaitRes(p.Type)
+	return c.sendData(p)
 }
 
 // Login 用户登录 ok
 func (c *MspKey) Login(Name, Pwd string) error {
-	c.ClearRes()
+
 	var p sendJson
 	p.Type = tagLogin
 	p.Data = bson.M{"Name": Name, "Pwd": Pwd}
-	c.sendData(p)
-	return c.aWaitRes(p.Type)
+	return c.sendData(p)
 }
 
 // CarLogin 卡密登录 ok
 func (c *MspKey) CarLogin(Serial string) error {
-	c.ClearRes()
+
 	var p sendJson
 	p.Type = tagCarLogin
 	p.Data = bson.M{"Serial": Serial}
-	c.sendData(p)
-	err := c.aWaitRes(p.Type)
+	err := c.sendData(p)
 	if err != nil {
 		return err
 	}
@@ -427,12 +445,11 @@ func (c *MspKey) CarLogin(Serial string) error {
 
 // CkLogin ck登录
 func (c *MspKey) CkLogin(CK string) error {
-	c.ClearRes()
+
 	var p sendJson
 	p.Type = tagCkLogin
 	p.Data = bson.M{"CK": CK}
-	c.sendData(p)
-	err := c.aWaitRes(p.Type)
+	err := c.sendData(p)
 	if err != nil {
 		return err
 	}
@@ -442,61 +459,56 @@ func (c *MspKey) CkLogin(CK string) error {
 
 // UserPay 用户卡密充值 ok
 func (c *MspKey) UserPay(Name, Serial string) error {
-	c.ClearRes()
+
 	var p sendJson
 	p.Type = tagUserPay
 	p.Data = bson.M{"Name": Name, "Serial": Serial}
-	c.sendData(p)
-	return c.aWaitRes(p.Type)
+	return c.sendData(p)
 }
 
 // UpUserPwd 修改密码 ok
 func (c *MspKey) UpUserPwd(Name, OldPwd, NewPwd string) error {
-	c.ClearRes()
+
 	var p sendJson
 	p.Type = tagUpUserPwd
 	p.Data = bson.M{"Name": Name, "OldPwd": OldPwd, "NewPwd": NewPwd}
-	c.sendData(p)
-	return c.aWaitRes(p.Type)
+	return c.sendData(p)
 }
 
 // BindDeviceID 换绑 ok
 func (c *MspKey) BindDeviceID(Name, Pwd string) error {
-	c.ClearRes()
+
 	var p sendJson
 	p.Type = tagBindDeviceID
 	p.Data = bson.M{"Name": Name, "Pwd": Pwd}
-	c.sendData(p)
-	return c.aWaitRes(p.Type)
+	return c.sendData(p)
 }
 
 // AddBlack 加入黑名单
 func (c *MspKey) AddBlack(Bak string) error {
-	c.ClearRes()
+
 	var p sendJson
 	p.Type = tagAddBlack
 	p.Data = bson.M{"Bak": Bak}
-	c.sendData(p)
-	return c.aWaitRes(p.Type)
+	return c.sendData(p)
 
 }
 
 // GetUserInfo 获取用户信息 ok
 func (c *MspKey) GetUserInfo() error {
-	c.ClearRes()
+
 	err := c.auth()
 	if err != nil {
 		return err
 	}
 	var p sendJson
 	p.Type = tagUserInfo
-	c.sendData(p)
-	return c.aWaitRes(p.Type)
+	return c.sendData(p)
 }
 
 // SetUerConf 设置用户配置信息 ok
 func (c *MspKey) SetUerConf(Conf string) error {
-	c.ClearRes()
+
 	err := c.auth()
 	if err != nil {
 		return err
@@ -504,22 +516,20 @@ func (c *MspKey) SetUerConf(Conf string) error {
 	var p sendJson
 	p.Type = tagSetUerConf
 	p.Data = bson.M{"Conf": Conf}
-	c.sendData(p)
-	return c.aWaitRes(p.Type)
+	return c.sendData(p)
 
 }
 
 // GetExeData 获取核心数据 ok
 func (c *MspKey) GetExeData() (string, error) {
-	c.ClearRes()
+
 	err := c.auth()
 	if err != nil {
 		return "", err
 	}
 	var p sendJson
 	p.Type = tagExeData
-	c.sendData(p)
-	err = c.aWaitRes(p.Type)
+	err = c.sendData(p)
 	if err != nil {
 		return "", err
 	}
@@ -529,7 +539,7 @@ func (c *MspKey) GetExeData() (string, error) {
 
 // GetVariable 获取远程变量 ok
 func (c *MspKey) GetVariable(Key string) (string, error) {
-	c.ClearRes()
+
 	err := c.auth()
 	if err != nil {
 		return "", err
@@ -537,8 +547,7 @@ func (c *MspKey) GetVariable(Key string) (string, error) {
 	var p sendJson
 	p.Type = tagVariable
 	p.Data = bson.M{"Key": Key}
-	c.sendData(p)
-	err = c.aWaitRes(p.Type)
+	err = c.sendData(p)
 	if err != nil {
 		return "", err
 	}
@@ -547,7 +556,7 @@ func (c *MspKey) GetVariable(Key string) (string, error) {
 
 // ping 发送心跳包 内部已经完成自动心跳功能
 func (c *MspKey) ping() {
-	if c.state {
+	if c.isCoon {
 		var p sendJson
 		p.Type = tagPing
 		//发送检测数据
@@ -556,7 +565,7 @@ func (c *MspKey) ping() {
 			"Key":   c.devKey,
 		}
 		p.Data = data
-		c.sendData(p)
+		_ = c.sendData(p)
 	}
 
 	//判断登陆后是否到期
@@ -581,20 +590,19 @@ func (c *MspKey) QuickLogin() error {
 	url := fmt.Sprintf("http://localhost:8810/ms/#/WebLogin?DevKey=%s", c.devKey)
 	_ = msp.OpenBrowser(url)
 	log.Println("网页登录地址:" + url)
-	c.ClearRes()
+
 	var p sendJson
 	p.Type = tagQuick
 	index := 0
 	for {
-		c.sendData(p)
-		err := c.aWaitRes(p.Type)
+		err := c.sendData(p)
 		if err != nil {
 			if index == 0 {
-				log.Println(c.res.Msg)
+				log.Println(err)
 			}
 		} else {
 			msp.ClearScreen()
-			log.Println(c.res.Msg)
+			log.Println(err)
 			c.isLogin = true
 			return nil
 		}
@@ -605,7 +613,7 @@ func (c *MspKey) QuickLogin() error {
 
 // VmpAuth VMP授权下发
 func (c *MspKey) VmpAuth() (string, error) {
-	c.ClearRes()
+
 	err := c.auth()
 	if err != nil {
 		return "", err
@@ -613,8 +621,7 @@ func (c *MspKey) VmpAuth() (string, error) {
 	var p sendJson
 	p.Type = tagVMPAuth
 	p.Data = bson.M{"HardwareId": c.config.DevID}
-	c.sendData(p)
-	err = c.aWaitRes(p.Type)
+	err = c.sendData(p)
 	if err != nil {
 		return "", err
 	}
@@ -631,7 +638,7 @@ func (c *MspKey) safe() {
 		if c.Exe.AdminID.Hex() != c.config.AdminKey {
 			log.Fatalln("密钥错误")
 		}
-		if !c.state {
+		if !c.isCoon {
 			return
 		}
 	}
