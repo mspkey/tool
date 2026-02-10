@@ -55,6 +55,7 @@ type ExeInfo struct {
 	SubTime         int64         `json:"SubTime" bson:"SubTime"`                  //换绑扣时间 单位/小时
 	BindDeviceIDNum int64         `json:"BindDeviceIDNum"  bson:"BindDeviceIDNum"` //同一软件同一设备用户注册数量限制
 	LoginMod        int64         `json:"LoginMod"  bson:"LoginMod"`               //登录模式0=单卡+用户 1=用户登录 2=单卡登录
+	PayLink         string        `json:"PayLink" bson:"PayLink"`                  //购买地址链接
 }
 
 // Car 卡密结构
