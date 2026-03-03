@@ -3,9 +3,11 @@ package msp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 	"time"
 )
 
@@ -18,16 +20,58 @@ type MongoDB struct {
 
 // SetDB 初始化数据库 前置条件 需要设置数据库 url
 func (c *MongoDB) SetDB(url string) error {
-	c.Ctx = context.Background()
+	// 1. 检查旧客户端，避免连接泄露
+	if c.Client != nil {
+		// 关闭旧连接（使用独立的上下文，避免主 ctx 已取消）
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer closeCancel()
+		if err := c.Client.Disconnect(closeCtx); err != nil {
+			return fmt.Errorf("关闭旧数据库连接失败: %w", err)
+		}
+	}
+
+	// 2. 初始化上下文（推荐使用可取消的 ctx，而非 background）
+	c.Ctx, _ = context.WithCancel(context.Background()) // 可在外部调用 cancel 关闭连接
+
+	// 3. 配置客户端选项（优化连接池参数）
 	clientOptions := options.Client().ApplyURI(url)
-	clientOptions.SetMaxPoolSize(1000)                // 设置最大连接数
-	clientOptions.SetMinPoolSize(50)                  // 设置最小连接数
-	clientOptions.SetConnectTimeout(50 * time.Second) // 设置连接超时时间
+	clientOptions.SetMaxPoolSize(100)                   // 合理的最大连接数（建议不超过 200）
+	clientOptions.SetMinPoolSize(10)                    // 最小连接数（按需设置）
+	clientOptions.SetConnectTimeout(30 * time.Second)   // 连接超时（30s 足够）
+	clientOptions.SetRetryWrites(true)                  // 新增：开启写重试
+	clientOptions.SetReadPreference(readpref.Primary()) // 新增：指定读偏好（主节点）
+
+	// 4. 建立连接（必须传递上下文）
 	client, err := mongo.Connect(clientOptions)
 	if err != nil {
-		return errors.New("数据库连接失败")
+		return fmt.Errorf("数据库连接失败: %w", err) // 保留原始错误
 	}
+
+	// 5. 验证连接（关键：确保客户端能正常访问数据库）
+	pingCtx, pingCancel := context.WithTimeout(c.Ctx, 10*time.Second)
+	defer pingCancel()
+	if err := client.Ping(pingCtx, readpref.Primary()); err != nil {
+		// 验证失败时关闭客户端，避免资源泄露
+		_ = client.Disconnect(context.Background())
+		return fmt.Errorf("数据库连接验证失败: %w", err)
+	}
+
+	// 6. 赋值客户端
 	c.Client = client
+	return nil
+}
+
+// CloseDB 优雅关闭数据库连接（新增：配套的关闭方法）
+func (c *MongoDB) CloseDB() error {
+	if c.Client == nil {
+		return nil
+	}
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer closeCancel()
+	if err := c.Client.Disconnect(closeCtx); err != nil {
+		return fmt.Errorf("关闭数据库连接失败: %w", err)
+	}
+	c.Client = nil
 	return nil
 }
 
