@@ -165,8 +165,21 @@ func loadBalancing(IP string) (string, error) {
 		return ipTemp, nil
 	}
 
+	ipTemp = "v2.msplock.vip:443"
+	err = pingServer(ipTemp)
+	if err == nil {
+		return ipTemp, nil
+	}
 
-	var IpList = []string{"v2.msplock.vip", "v3.msplock.vip", "v4.msplock.vip", "v5.msplock.vip", "v6.msplock.vip", "v7.msplock.vip"}
+	ipTemp = "v2.msplock.vip:8810"
+	err = pingServer(ipTemp)
+	if err == nil {
+		return ipTemp, nil
+	}
+
+
+
+	var IpList = []string{"v3.msplock.vip", "v4.msplock.vip", "v5.msplock.vip", "v6.msplock.vip", "v7.msplock.vip"}
 	//判断服务器状态
 	for _, item := range IpList {
 		//解析域名变IP
