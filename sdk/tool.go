@@ -121,7 +121,8 @@ func pingServer(IP string) error {
 		URL = "https://" + IP + "/ping"
 	}
 
-	resp, err := http.Get(URL)
+
+	resp, err := http.Post(URL,"application/json", nil)	
 	if err != nil {
 		return err
 	}

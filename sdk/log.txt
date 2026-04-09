@@ -2,3 +2,4 @@
 
 1.0.1
 新增初始随机密钥
+修改pingServer 为POST 方式
