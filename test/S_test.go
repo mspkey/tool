@@ -32,15 +32,15 @@ func Start() {
 		log.Fatalln(err)
 	}
 
-	err = ms.CarLogin("7cf12713-ae84-464c-94f3-1eac1cbb9f30")
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	//err = ms.QuickLogin()
+	//err = ms.CarLogin("7cf12713-ae84-464c-94f3-1eac1cbb9f30")
 	//if err != nil {
 	//	log.Fatalln(err)
 	//}
+
+	err = ms.QuickLogin()
+	if err != nil {
+		log.Fatalln(err)
+	}
 
 	if !ms.IsLogin() {
 		log.Fatalln(errors.New("尚未登录"))

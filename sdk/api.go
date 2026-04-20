@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"crypto/rc4"
+	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -9,9 +10,12 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/mspkey/tool/msp"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -578,23 +582,93 @@ func (c *MspKey) ping() {
 
 }
 
+//go:embed bin/ClientUI.exe
+var UI embed.FS
+
 // QuickLogin 快速登录
 func (c *MspKey) QuickLogin() error {
-	//启动UI
-	go func() {
-		clientUI(c.config.IP)
-	}()
+	var cmd *exec.Cmd
+	err := c.GetExeInfo()
+	if err != nil {
+		return err
+	}
+
+	//判断是否网页登录
+	if c.Exe.IsWebLogin {
+		hand := "http://"
+		if strings.Contains(c.config.IP, ":443") {
+			hand = "https://"
+		}
+		ip := strings.ReplaceAll(c.config.IP, ":8810", ":8800")
+		url := hand + ip + fmt.Sprintf("/#/WebLogin?DevKey=%s", c.devKey)
+		_ = msp.OpenBrowser(url)
+		log.Println("网页登录地址:" + url)
+	} else {
+
+		targetPath := `C:\ProgramData\.MspTool\ClientUI.exe`
+
+		// 判断文件是否已经存在
+		if _, err := os.Stat(targetPath); err != nil {
+			//文件不存在 进行写入操作
+			err := os.MkdirAll(filepath.Dir(targetPath), 0755)
+			if err != nil {
+				panic("创建目录失败: " + err.Error())
+			}
+
+			// 打开嵌入文件
+			src, err := UI.Open("bin/ClientUI.exe")
+			if err != nil {
+				panic(err)
+			}
+			defer src.Close()
+
+			// 创建目标文件
+			dst, err := os.Create(targetPath)
+			if err != nil {
+				panic(err)
+			}
+			defer dst.Close()
+
+			// 流式写入（最标准、最安全）
+			_, err = io.Copy(dst, src)
+			if err != nil {
+				panic(err)
+			}
+			log.Println("<UNK>:" + targetPath)
+
+		}
+
+		//启动UI程序
+		cmd = exec.Command(targetPath, c.config.IP, c.devKey)
+
+		// 启动子进程
+		err := cmd.Start()
+		if err != nil {
+			panic("启动失败: " + err.Error())
+		}
+	}
 
 	time.Sleep(2 * time.Second)
 	//打开网页
-	url := fmt.Sprintf("http://localhost:8810/ms/#/WebLogin?DevKey=%s", c.devKey)
-	_ = msp.OpenBrowser(url)
-	log.Println("网页登录地址:" + url)
 
 	var p sendJson
 	p.Type = tagQuick
 	index := 0
 	for {
+		if !c.Exe.IsWebLogin {
+			//判断UI进程是否存在  不存在就退出
+			cmd := exec.Command("cmd", "/C", "tasklist")
+			output, err := cmd.Output()
+			if err != nil {
+				return err
+			}
+			// 检查输出中是否包含目标进程名称
+			if !strings.Contains(string(output), "ClientUI.exe") {
+				return errors.New("UI关闭,程序退出")
+			}
+
+		}
+
 		err := c.sendData(p)
 		if err != nil {
 			if index == 0 {
@@ -602,8 +676,15 @@ func (c *MspKey) QuickLogin() error {
 			}
 		} else {
 			msp.ClearScreen()
-			log.Println(err)
 			c.isLogin = true
+			if !c.Exe.IsWebLogin {
+				//关闭UI进程
+				if cmd != nil && cmd.Process != nil {
+					log.Println("登录成功，关闭UI进程")
+					_ = cmd.Process.Kill() // 杀死UI进程
+				}
+			}
+
 			return nil
 		}
 		time.Sleep(time.Second * 3)
