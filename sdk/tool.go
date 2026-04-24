@@ -56,11 +56,18 @@ func loadBalancing(IP string) (string, error) {
 		return IP, nil
 	}
 
-	ipTemp := "v1.msplock.vip:8810"
+	ipTemp := "v1.msplock.vip:443"
 	err := pingServer(ipTemp)
 	if err == nil {
 		return ipTemp, nil
 	}
+
+	ipTemp = "v1.msplock.vip:8810"
+	err = pingServer(ipTemp)
+	if err == nil {
+		return ipTemp, nil
+	}
+	
 
 	ipTemp = "v2.msplock.vip:8810"
 	err = pingServer(ipTemp)
