@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"github.com/mspkey/tool/sdk"
 	"log"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestOps(t *testing.T) {
-	Start()
+	reportConnStatus()
 
 }
 
@@ -54,4 +56,13 @@ func Start() {
 
 	time.Sleep(1 * time.Hour)
 
+}
+
+func reportConnStatus() {
+	URL := "http://" + "127.0.0.1:8820" + "/api/user/ReportConnStatus?DevKey=" + "M8DN3cU65HCqofFH"
+	if strings.Contains("127.0.0.1:8820", ":443") {
+		URL = "https://" + "127.0.0.1:8820" + "/api/user/ReportConnStatus?DevKey=" + "M8DN3cU65HCqofFH"
+	}
+	_, _ = http.Post(URL, "application/json", nil)
+	return
 }

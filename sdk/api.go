@@ -261,6 +261,11 @@ func (c *MspKey) connectServer() error {
 		c.url = fmt.Sprintf("ws://%s/api/user/ws", c.config.IP)
 	}
 
+	//兜底清除异常连接
+	if c.devKey != "" {
+		c.reportConnStatus()
+	}
+
 	key := msp.GetRandomString(6)
 	c.devKey = key //默认密钥
 
@@ -743,4 +748,15 @@ func (c *MspKey) getToken() string {
 	}
 	msg := rc4EncryptString(c.devKey, string(marshal))
 	return msg
+}
+
+// reportConnStatus 上报退出状态
+func (c *MspKey) reportConnStatus() {
+	URL := "http://" + c.config.IP + "/api/user/ReportConnStatus?DevKey=" + c.devKey
+	if strings.Contains(c.config.IP, ":443") {
+		URL = "https://" + c.config.IP + "/api/user/ReportConnStatus?DevKey=" + c.devKey
+	}
+
+	_, _ = http.Post(URL, "application/json", nil)
+	return
 }
