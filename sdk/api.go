@@ -66,7 +66,6 @@ type MspKey struct {
 	isAdmin   bool         //是否群主服务器
 	writeLock sync.Mutex   //写入锁
 	quitHart  chan bool    //退出心跳包
-	IsPint    bool         //是否输出打印
 }
 
 func (c *MspKey) IsLogin() bool {
@@ -88,10 +87,10 @@ func (c *MspKey) onMessage() {
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
 			c.isCoon = false
-			c.println("服务器断开连接")
+			log.Println("服务器断开连接")
 			//进行断线重连
 			if c.isReset && c.isLogin {
-				c.println("断线重连中....")
+				log.Println("断线重连中....")
 				go c.RestConn()
 			} else {
 				log.Fatalln("尚未登录,程序结束")
@@ -112,7 +111,7 @@ func (c *MspKey) onMessage() {
 
 		err = json.Unmarshal(msg, &data)
 		if err != nil {
-			c.println("Error:" + err.Error())
+			log.Println("Error:", err)
 			continue
 		}
 
@@ -131,7 +130,7 @@ func (c *MspKey) onMessage() {
 
 		//实时消息
 		if data.Tag == "SendMsg" && data.Code == 1 {
-			c.println("收到一条实时消息:" + data.Msg)
+			log.Println("收到一条实时消息:" + data.Msg)
 			continue
 		}
 
@@ -144,9 +143,9 @@ func (c *MspKey) onMessage() {
 		//是否强制更新
 		if data.Tag == "UpDate" && data.Code == 0 {
 			msp.ClearScreen()
-			c.println("检测到新版本，请下载新版本")
+			log.Println("检测到新版本，请下载新版本")
 			if c.Exe.Address != "" {
-				c.println("新版本下载地址:" + c.Exe.Address)
+				log.Println("新版本下载地址:" + c.Exe.Address)
 			}
 			os.Exit(1)
 			return
@@ -192,8 +191,8 @@ func (c *MspKey) onMessage() {
 				case tagPing:
 					Haunt++
 					if c.IsDug {
-						c.println(fmt.Sprintf("收到心跳包,心跳次数:%d", Haunt))
-						c.println(fmt.Sprintf("心跳包数据：%s", data.Msg))
+						log.Println(fmt.Sprintf("收到心跳包,心跳次数:%d", Haunt))
+						log.Println(fmt.Sprintf("心跳包数据：%s", data.Msg))
 					}
 				case tagVMPAuth:
 					if v, ok := data.Data.(map[string]any); ok {
@@ -221,7 +220,7 @@ func (c *MspKey) sendData(send sendJson) error {
 		return err
 	}
 	if c.IsDug {
-		c.println("发送数据:->" + string(marshal))
+		log.Println("发送数据:->" + string(marshal))
 	}
 
 	msg := rc4EncryptString(c.devKey, string(marshal))
@@ -309,7 +308,7 @@ func (c *MspKey) connectServer() error {
 					select {
 					case <-c.quitHart:
 						if c.IsDug {
-							c.println("退出心跳包")
+							log.Println("退出心跳包")
 						}
 						return
 					case <-time.After(time.Second * 60):
@@ -379,7 +378,7 @@ func (c *MspKey) RestConn() {
 
 	count := 3
 	for {
-		c.println(fmt.Sprintf("第%d次断线重连", count+1))
+		log.Println(fmt.Sprintf("第%d次断线重连", count+1))
 		time.Sleep(time.Second * time.Duration(count))
 		err = c.connectServer()
 		if err != nil {
@@ -392,7 +391,7 @@ func (c *MspKey) RestConn() {
 			count++
 			continue
 		}
-		c.println("断线重连成功,自动登录中...")
+		log.Println("断线重连成功,自动登录中...")
 		break
 	}
 
@@ -404,7 +403,7 @@ func (c *MspKey) RestConn() {
 			if err != nil {
 				log.Fatalln(err)
 			} else {
-				c.println("自动登录成功")
+				log.Println("自动登录成功")
 				break
 			}
 		} else {
@@ -608,7 +607,7 @@ func (c *MspKey) QuickLogin() error {
 		ip := strings.ReplaceAll(c.config.IP, ":8810", ":8800")
 		url := hand + ip + fmt.Sprintf("/#/WebLogin?DevKey=%s", c.devKey)
 		_ = msp.OpenBrowser(url)
-		c.println("网页登录地址:" + url)
+		log.Println("网页登录地址:" + url)
 	} else {
 
 		targetPath := `C:\ProgramData\.MspTool\ClientUI.exe`
@@ -640,7 +639,7 @@ func (c *MspKey) QuickLogin() error {
 			if err != nil {
 				panic(err)
 			}
-			c.println("<UNK>:" + targetPath)
+			log.Println("<UNK>:" + targetPath)
 
 		}
 
@@ -678,7 +677,7 @@ func (c *MspKey) QuickLogin() error {
 		err := c.sendData(p)
 		if err != nil {
 			if index == 0 {
-				c.println(err.Error())
+				log.Println(err)
 			}
 		} else {
 			msp.ClearScreen()
@@ -686,7 +685,7 @@ func (c *MspKey) QuickLogin() error {
 			if !c.Exe.IsWebLogin {
 				//关闭UI进程
 				if cmd != nil && cmd.Process != nil {
-					c.println("登录成功，关闭UI进程")
+					log.Println("登录成功，关闭UI进程")
 					_ = cmd.Process.Kill() // 杀死UI进程
 				}
 			}
@@ -760,11 +759,4 @@ func (c *MspKey) reportConnStatus() {
 
 	_, _ = http.Post(URL, "application/json", nil)
 	return
-}
-
-// println 打印信息
-func (c *MspKey) println(str string) {
-	if c.IsPint {
-		log.Println(str)
-	}
 }
