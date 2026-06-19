@@ -601,10 +601,8 @@ func (c *MspKey) QuickLogin() error {
 	//判断是否网页登录
 	if c.Exe.IsWebLogin {
 		hand := "http://"
-		if strings.Contains(c.config.IP, ":443") {
-			hand = "https://"
-		}
-		ip := strings.ReplaceAll(c.config.IP, ":8810", ":8800")
+		ip := strings.ReplaceAll(c.config.IP, ":443", ":8800")
+		ip = strings.ReplaceAll(ip, ":8810", ":8800")
 		url := hand + ip + fmt.Sprintf("/#/WebLogin?DevKey=%s", c.devKey)
 		_ = msp.OpenBrowser(url)
 		log.Println("网页登录地址:" + url)
