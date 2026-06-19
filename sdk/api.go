@@ -66,6 +66,7 @@ type MspKey struct {
 	isAdmin   bool         //是否群主服务器
 	writeLock sync.Mutex   //写入锁
 	quitHart  chan bool    //退出心跳包
+	IsPint    bool         //是否输出打印
 }
 
 func (c *MspKey) IsLogin() bool {
@@ -87,10 +88,10 @@ func (c *MspKey) onMessage() {
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
 			c.isCoon = false
-			log.Println("服务器断开连接")
+			c.println("服务器断开连接")
 			//进行断线重连
 			if c.isReset && c.isLogin {
-				log.Println("断线重连中....")
+				c.println("断线重连中....")
 				go c.RestConn()
 			} else {
 				log.Fatalln("尚未登录,程序结束")
@@ -104,14 +105,14 @@ func (c *MspKey) onMessage() {
 			continue
 		}
 		if c.IsDug {
-			log.Printf("接受数据:<- %s\n", msg)
+			log.Println("接受数据:<- %s\n", msg)
 		}
 
 		var data resJson
 
 		err = json.Unmarshal(msg, &data)
 		if err != nil {
-			log.Println("Error:", err)
+			c.println("Error:" + err.Error())
 			continue
 		}
 
@@ -130,7 +131,7 @@ func (c *MspKey) onMessage() {
 
 		//实时消息
 		if data.Tag == "SendMsg" && data.Code == 1 {
-			log.Println("收到一条实时消息:" + data.Msg)
+			c.println("收到一条实时消息:" + data.Msg)
 			continue
 		}
 
@@ -143,9 +144,9 @@ func (c *MspKey) onMessage() {
 		//是否强制更新
 		if data.Tag == "UpDate" && data.Code == 0 {
 			msp.ClearScreen()
-			log.Println("检测到新版本，请下载新版本")
+			c.println("检测到新版本，请下载新版本")
 			if c.Exe.Address != "" {
-				log.Println("新版本下载地址:" + c.Exe.Address)
+				c.println("新版本下载地址:" + c.Exe.Address)
 			}
 			os.Exit(1)
 			return
@@ -191,8 +192,8 @@ func (c *MspKey) onMessage() {
 				case tagPing:
 					Haunt++
 					if c.IsDug {
-						log.Println(fmt.Sprintf("收到心跳包,心跳次数:%d", Haunt))
-						log.Println(fmt.Sprintf("心跳包数据：%s", data.Msg))
+						c.println(fmt.Sprintf("收到心跳包,心跳次数:%d", Haunt))
+						c.println(fmt.Sprintf("心跳包数据：%s", data.Msg))
 					}
 				case tagVMPAuth:
 					if v, ok := data.Data.(map[string]any); ok {
@@ -220,7 +221,7 @@ func (c *MspKey) sendData(send sendJson) error {
 		return err
 	}
 	if c.IsDug {
-		log.Println("发送数据:->" + string(marshal))
+		c.println("发送数据:->" + string(marshal))
 	}
 
 	msg := rc4EncryptString(c.devKey, string(marshal))
@@ -308,7 +309,7 @@ func (c *MspKey) connectServer() error {
 					select {
 					case <-c.quitHart:
 						if c.IsDug {
-							log.Println("退出心跳包")
+							c.println("退出心跳包")
 						}
 						return
 					case <-time.After(time.Second * 60):
@@ -378,7 +379,7 @@ func (c *MspKey) RestConn() {
 
 	count := 3
 	for {
-		log.Println(fmt.Sprintf("第%d次断线重连", count+1))
+		c.println(fmt.Sprintf("第%d次断线重连", count+1))
 		time.Sleep(time.Second * time.Duration(count))
 		err = c.connectServer()
 		if err != nil {
@@ -391,7 +392,7 @@ func (c *MspKey) RestConn() {
 			count++
 			continue
 		}
-		log.Println("断线重连成功,自动登录中...")
+		c.println("断线重连成功,自动登录中...")
 		break
 	}
 
@@ -403,7 +404,7 @@ func (c *MspKey) RestConn() {
 			if err != nil {
 				log.Fatalln(err)
 			} else {
-				log.Println("自动登录成功")
+				c.println("自动登录成功")
 				break
 			}
 		} else {
@@ -607,7 +608,7 @@ func (c *MspKey) QuickLogin() error {
 		ip := strings.ReplaceAll(c.config.IP, ":8810", ":8800")
 		url := hand + ip + fmt.Sprintf("/#/WebLogin?DevKey=%s", c.devKey)
 		_ = msp.OpenBrowser(url)
-		log.Println("网页登录地址:" + url)
+		c.println("网页登录地址:" + url)
 	} else {
 
 		targetPath := `C:\ProgramData\.MspTool\ClientUI.exe`
@@ -639,7 +640,7 @@ func (c *MspKey) QuickLogin() error {
 			if err != nil {
 				panic(err)
 			}
-			log.Println("<UNK>:" + targetPath)
+			c.println("<UNK>:" + targetPath)
 
 		}
 
@@ -677,7 +678,7 @@ func (c *MspKey) QuickLogin() error {
 		err := c.sendData(p)
 		if err != nil {
 			if index == 0 {
-				log.Println(err)
+				c.println(err.Error())
 			}
 		} else {
 			msp.ClearScreen()
@@ -685,7 +686,7 @@ func (c *MspKey) QuickLogin() error {
 			if !c.Exe.IsWebLogin {
 				//关闭UI进程
 				if cmd != nil && cmd.Process != nil {
-					log.Println("登录成功，关闭UI进程")
+					c.println("登录成功，关闭UI进程")
 					_ = cmd.Process.Kill() // 杀死UI进程
 				}
 			}
@@ -759,4 +760,11 @@ func (c *MspKey) reportConnStatus() {
 
 	_, _ = http.Post(URL, "application/json", nil)
 	return
+}
+
+// println 打印信息
+func (c *MspKey) println(str string) {
+	if c.IsPint {
+		log.Println(str)
+	}
 }
