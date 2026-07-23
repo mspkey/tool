@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"encoding/json"
 	"errors"
 	"github.com/mspkey/tool/msp"
 	"io"
@@ -24,6 +25,7 @@ func pingServer(IP string) error {
 		URL = "https://" + IP + "/ping"
 	}
 
+	var res PingData
 	resp, err := http.Post(URL, "application/json", nil)
 	if err != nil {
 		return err
@@ -33,11 +35,21 @@ func pingServer(IP string) error {
 	if err != nil {
 		return err
 	}
-	//fmt.Println(string(body))
-	if strings.Contains(string(body), "服务可用OK") {
+
+	err = json.Unmarshal(body, &res)
+	if err != nil {
+		return err
+	}
+	if res.Code == 1 && res.Msg == "服务可用OK" {
+		str := "60fb8d411d1bc60d7ee982d4" + res.Time
+		md5 := msp.Encrypt{}
+		if md5.Md5Encrypt(str) != res.Msg {
+			return errors.New("FN码校验失败")
+		}
 		return nil
 	}
-	return nil
+
+	return errors.New("服务不可用NO")
 }
 
 // ResolveIP  解析域名变IP
@@ -52,7 +64,7 @@ func ResolveIP(str string) (string, error) {
 // loadBalancing 负载均衡
 func loadBalancing(IP string) (string, error) {
 	//判断是否群主服务器
-	if IP != LockHost {
+	if !strings.EqualFold(IP, LockHost) {
 		return IP, nil
 	}
 
@@ -67,7 +79,6 @@ func loadBalancing(IP string) (string, error) {
 	if err == nil {
 		return ipTemp, nil
 	}
-	
 
 	ipTemp = "v2.msplock.vip:8810"
 	err = pingServer(ipTemp)

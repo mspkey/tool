@@ -119,6 +119,14 @@ type resDate struct {
 	PayLink         PayLink `json:"payLink"`
 }
 
+// PingData Ping服务器返回的数据
+type PingData struct {
+	Code int    `json:"Code"`
+	Msg  string `json:"Msg"`
+	Time string `json:"Time"`
+	FN   string `json:"FN"`
+}
+
 // tagCode 验证码
 const tagDevKey = "DevKey"
 const tagCode = "GetCode"

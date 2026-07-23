@@ -66,6 +66,7 @@ type MspKey struct {
 	isAdmin   bool         //是否群主服务器
 	writeLock sync.Mutex   //写入锁
 	quitHart  chan bool    //退出心跳包
+	count     int64        //心跳次数
 }
 
 func (c *MspKey) IsLogin() bool {
@@ -104,7 +105,7 @@ func (c *MspKey) onMessage() {
 			continue
 		}
 		if c.IsDug {
-			log.Println("接受数据:<- %s\n", msg)
+			log.Printf("接受数据:<- %s", msg)
 		}
 
 		var data resJson
@@ -284,7 +285,7 @@ func (c *MspKey) connectServer() error {
 
 	c.conn, _, err = websocket.DefaultDialer.Dial(c.url, header)
 	if err != nil {
-		return errors.New("服务器连接失败")
+		return errors.New("服务器连接失败:" + err.Error())
 	}
 
 	go c.onMessage()
@@ -333,7 +334,7 @@ func (c *MspKey) connectServer() error {
 func (c *MspKey) Init(Config Config) error {
 	c.config = Config
 	//判断是否群主服务器
-	if c.config.IP == LockHost {
+	if strings.EqualFold(c.config.IP, LockHost) {
 		c.isAdmin = true
 	}
 	//负载均衡
@@ -568,17 +569,20 @@ func (c *MspKey) ping() {
 	if c.isCoon {
 		var p sendJson
 		p.Type = tagPing
-		//发送检测数据
-		data := bson.M{
-			"Token": c.getToken(),
-			"Key":   c.devKey,
+		c.count++
+		//发送检测数据 10分钟进行一次检测
+		if c.count%10 == 0 {
+			data := bson.M{
+				"Token": c.getToken(),
+				"Key":   c.devKey,
+			}
+			p.Data = data
 		}
-		p.Data = data
 		_ = c.sendData(p)
 	}
 
 	//判断登陆后是否到期
-	if c.Info.Name != "" {
+	if c.isLogin {
 		if c.Info.EndTime.Unix() < time.Now().Unix() {
 			log.Fatalln("该账号已到期")
 		}

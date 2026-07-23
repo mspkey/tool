@@ -11,6 +11,9 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"	
+	"crypto/cipher"	
+	
 )
 
 //Encrypt 加解密
@@ -161,4 +164,89 @@ func (c *Encrypt) DecryptAES(key string, encryptText []byte) ([]byte, error) {
 	cipher.Decrypt(out, encryptText)
 
 	return out, nil
+}
+
+// PKCS7 填充
+func pkcs7Pad(data []byte, blockSize int) []byte {
+	padLen := blockSize - len(data)%blockSize
+	pad := make([]byte, padLen)
+	for i := range pad {
+		pad[i] = byte(padLen)
+	}
+	return append(data, pad...)
+}
+
+func pkcs7Unpad(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, errors.New("空密文")
+	}
+	padLen := int(data[len(data)-1])
+	if padLen <= 0 || padLen > aes.BlockSize || padLen > len(data) {
+		return nil, errors.New("填充长度非法")
+	}
+	// 校验所有填充字节一致，防攻击
+	for i := len(data) - padLen; i < len(data); i++ {
+		if int(data[i]) != padLen {
+			return nil, errors.New("填充校验失败，密钥错误或数据篡改")
+		}
+	}
+	return data[:len(data)-padLen], nil
+}
+
+// Aes256CbcEncrypt AES-256-CBC 加密
+// key：必须32字节
+// 返回 base64(IV + 密文)
+func (c *Encrypt)Aes256CbcEncrypt(plainText, key []byte) (string, error) {
+	if len(key) != 32 {
+		return "", errors.New("AES256密钥必须32字节")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	blockSize := block.BlockSize()
+
+	// 生成16字节随机IV
+	iv := make([]byte, blockSize)
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return "", err
+	}
+
+	padded := pkcs7Pad(plainText, blockSize)
+	cipherBuf := make([]byte, len(padded))
+	mode := cipher.NewCBCEncrypter(block, iv)
+	mode.CryptBlocks(cipherBuf, padded)
+
+	// IV拼接密文再base64
+	full := append(iv, cipherBuf...)
+	return base64.StdEncoding.EncodeToString(full), nil
+}
+
+// Aes256CbcDecrypt AES-256-CBC 解密
+func (c *Encrypt)Aes256CbcDecrypt(cipherBase64 string, key []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, errors.New("AES256密钥必须32字节")
+	}
+	data, err := base64.StdEncoding.DecodeString(cipherBase64)
+	if err != nil {
+		return nil, errors.New("base64解码失败")
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	blockSize := block.BlockSize()
+	if len(data) < blockSize {
+		return nil, errors.New("密文过短，缺少IV")
+	}
+
+	iv := data[:blockSize]
+	cipherText := data[blockSize:]
+
+	decryptMode := cipher.NewCBCDecrypter(block, iv)
+	plainPadded := make([]byte, len(cipherText))
+	decryptMode.CryptBlocks(plainPadded, cipherText)
+
+	return pkcs7Unpad(plainPadded)
 }
