@@ -7,9 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/gorilla/websocket"
-	"github.com/mspkey/tool/msp"
-	"go.mongodb.org/mongo-driver/v2/bson"
 	"io"
 	"log"
 	"net/http"
@@ -19,7 +16,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/mspkey/tool/msp"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // rc4EncryptString 用rc4进行加密 返回base64 格式数据
@@ -676,6 +678,8 @@ func (c *MspKey) QuickLogin() error {
 
 		//启动UI程序
 		cmd = exec.Command(targetPath, c.config.IP, c.devKey)
+		// 隐藏子进程控制台窗口（防止DLL被调用时黑窗口闪烁）
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 
 		// 启动子进程
 		err := cmd.Start()
@@ -694,6 +698,8 @@ func (c *MspKey) QuickLogin() error {
 		if !c.Exe.IsWebLogin {
 			//判断UI进程是否存在  不存在就退出
 			cmd := exec.Command("cmd", "/C", "tasklist")
+			// 隐藏cmd控制台窗口（防止每3秒一次的黑窗口闪烁）
+			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 			output, err := cmd.Output()
 			if err != nil {
 				return err
