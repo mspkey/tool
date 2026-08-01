@@ -354,18 +354,20 @@ func (c *MspKey) Init(Config Config) error {
 			ui := &bin.ClientUI{}
 			exePath, err := os.Executable()
 			if err != nil {
-				panic(err)
+				log.Fatalln(err)
+
 			}
 			// 取出目录（剔除exe文件名）
 			exeDir, err := filepath.EvalSymlinks(exePath) // 处理软链接
 			if err != nil {
-				panic(err)
+				log.Fatalln(err)
 			}
-
+			
 			err = ui.RunDownUI(c.Exe.Address, filepath.Dir(exeDir), Name)
 			if err != nil {
-				return err
+				log.Fatalln(err)
 			}
+			log.Fatalln("当前不是最新版本,正在更新软件中....")
 
 		}
 
