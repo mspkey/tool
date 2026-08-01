@@ -135,20 +135,6 @@ func (c *MspKey) onMessage() {
 			return
 		}
 
-		//是否强制更新
-		if data.Tag == "UpDate" && data.Code == 0 {
-			c.Exe, err = c.GetExeInfo()
-			if err != nil {
-				log.Println(err)
-			}
-			msp.ClearScreen()
-			log.Println("检测到新版本，请下载新版本")
-			if c.Exe.Address != "" {
-				log.Println("新版本下载地址:" + c.Exe.Address)
-			}
-			os.Exit(1)
-			return
-		}
 
 		if data.Tag == tagPing {
 			Haunt++
