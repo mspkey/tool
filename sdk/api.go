@@ -2,12 +2,10 @@ package sdk
 
 import (
 	"crypto/rc4"
-	"embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -20,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mspkey/tool/bin"
 	"github.com/mspkey/tool/msp"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -154,8 +153,8 @@ func (c *MspKey) onMessage() {
 		if data.Tag == tagPing {
 			Haunt++
 			if c.IsDug {
-				log.Println(fmt.Sprintf("收到心跳包,心跳次数:%d", Haunt))
-				log.Println(fmt.Sprintf("心跳包数据：%s", data.Msg))
+				log.Printf("收到心跳包,心跳次数:%d\n", Haunt)
+				log.Printf("心跳包数据：%s\n", data.Msg)
 			}
 		}
 
@@ -311,6 +310,67 @@ func (c *MspKey) Init(Config Config) error {
 
 	//获取软件信息,用于之后的各种调用
 	_, _ = c.GetExeInfo()
+
+	//判断软件是否需要更新
+	if c.Exe.IsUpDate {
+
+		if c.Exe.Versions != c.config.Version {
+			//判断更新地址是否可用
+			if c.Exe.Address == "" {
+				log.Fatalln("当前版本不是最新版本，请更新版本")
+			}
+
+			//判断是否直链
+			str := c.Exe.Address[len(c.Exe.Address)-5:]
+			isdown := false
+
+			Name := ""
+			if strings.Contains(str, ".rar") {
+				isdown = true
+				Name = c.Exe.Title + "_" + c.Exe.Versions + ".rar"
+			}
+			if strings.Contains(str, ".zip") {
+				isdown = true
+				Name = c.Exe.Title + "_" + c.Exe.Versions + ".zip"
+			}
+			if strings.Contains(str, ".exe") {
+				isdown = true
+				Name = c.Exe.Title + "_" + c.Exe.Versions + ".exe"
+			}
+			if strings.Contains(str, ".7z") {
+				isdown = true
+				Name = c.Exe.Title + "_" + c.Exe.Versions + ".7z"
+			}
+
+			if !isdown {
+				//使用游览器打开
+				err := msp.OpenBrowser(c.Exe.Address)
+				if err != nil {
+					return err
+				}
+			}
+
+			//需要进行更新
+			ui := &bin.ClientUI{}
+			exePath, err := os.Executable()
+			if err != nil {
+				panic(err)
+			}
+			// 取出目录（剔除exe文件名）
+			exeDir, err := filepath.EvalSymlinks(exePath) // 处理软链接
+			if err != nil {
+				panic(err)
+			}
+
+			err = ui.RunDownUI(c.Exe.Address, filepath.Dir(exeDir), Name)
+			if err != nil {
+				return err
+			}
+
+		}
+
+	}
+
 	return nil
 }
 
@@ -334,7 +394,7 @@ func (c *MspKey) RestConn() {
 
 	count := 3
 	for {
-		log.Println(fmt.Sprintf("第%d次断线重连", count+1))
+		log.Printf("第%d次断线重连\n", count+1)
 		time.Sleep(time.Second * time.Duration(count))
 		err = c.connectServer()
 		if err != nil {
@@ -626,65 +686,17 @@ func (c *MspKey) ping() {
 	}
 }
 
-//go:embed bin/ClientUI.exe
-var UI embed.FS
-
 // QuickLogin 快速登录ok
 func (c *MspKey) QuickLogin() error {
-	var cmd *exec.Cmd
 
+	ui := &bin.ClientUI{}
 	//判断是否网页登录
 	if c.Exe.IsWebLogin {
-		hand := "http://"
-		ip := strings.ReplaceAll(c.config.IP, ":443", ":8800")
-		ip = strings.ReplaceAll(ip, ":8810", ":8800")
-		url := hand + ip + fmt.Sprintf("/#/WebLogin?DevKey=%s", c.devKey)
-		_ = msp.OpenBrowser(url)
-		log.Println("网页登录地址:" + url)
+		ui.WebLogin(c.config.IP, c.devKey)
 	} else {
-
-		targetPath := `C:\ProgramData\.MspTool\ClientUI.exe`
-
-		// 判断文件是否已经存在
-		if _, err := os.Stat(targetPath); err != nil {
-			//文件不存在 进行写入操作
-			err := os.MkdirAll(filepath.Dir(targetPath), 0755)
-			if err != nil {
-				panic("创建目录失败: " + err.Error())
-			}
-
-			// 打开嵌入文件
-			src, err := UI.Open("bin/ClientUI.exe")
-			if err != nil {
-				panic(err)
-			}
-			defer src.Close()
-
-			// 创建目标文件
-			dst, err := os.Create(targetPath)
-			if err != nil {
-				panic(err)
-			}
-			defer dst.Close()
-
-			// 流式写入（最标准、最安全）
-			_, err = io.Copy(dst, src)
-			if err != nil {
-				panic(err)
-			}
-			log.Println("<UNK>:" + targetPath)
-
-		}
-
-		//启动UI程序
-		cmd = exec.Command(targetPath, c.config.IP, c.devKey)
-		// 隐藏子进程控制台窗口（防止DLL被调用时黑窗口闪烁）
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-
-		// 启动子进程
-		err := cmd.Start()
+		err := ui.RunLoginUI(c.config.IP, c.devKey)
 		if err != nil {
-			panic("启动失败: " + err.Error())
+			ui.WebLogin(c.config.IP, c.devKey)
 		}
 	}
 
@@ -724,12 +736,9 @@ func (c *MspKey) QuickLogin() error {
 			msp.ClearScreen()
 			if !c.Exe.IsWebLogin {
 				//关闭UI进程
-				if cmd != nil && cmd.Process != nil {
-					log.Println("登录成功，关闭UI进程")
-					_ = cmd.Process.Kill() // 杀死UI进程
-				}
+				ui.CloseUI()
+				log.Println("登录成功，关闭UI进程")
 			}
-
 			return nil
 		}
 		time.Sleep(time.Second * 3)
@@ -809,7 +818,7 @@ func (c *MspKey) reportConnStatus() {
 	}
 
 	_, _ = http.Post(URL, "application/json", nil)
-	return
+
 }
 
 // createSN()

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/mspkey/tool/msp"
 	"github.com/mspkey/tool/sdk"
+	"github.com/mspkey/tool/bin"
 	"log"
 	"testing"
 )
@@ -33,16 +34,21 @@ func TestSDK(t *testing.T) {
 	DevID := sdk.GetDevID()
 	cfg := sdk.Config{
 		IP:       "127.0.0.1:8820",
-		ExeID:    "6a212d15840856755db34daa",
+		ExeID:    "65bc7fe8defb0198aac98e3e",
 		Version:  "1.0.0",
 		DevID:    DevID,
-		AdminKey: "6a2108730662702a86ef00ba",
+		AdminKey: "646e0cdba20867821d3cc050",
 	}
 	ms := sdk.MspKey{}
 	err := ms.Init(cfg)
 	if err != nil {
 		log.Fatalln(err)
 	}
+
+	ms.QuickLogin()
+
+
+
 	err = ms.CarLogin("53e40bd6-64be-4f0c-87e4-b63fdaff1afc")
 	if err != nil {
 		log.Fatalln(err)
@@ -81,4 +87,13 @@ func TestSDK(t *testing.T) {
 	//}
 	//fmt.Println("<UNK>", info)
 
+}
+
+
+func TestRunDownUI(t *testing.T) {
+	ui := &bin.ClientUI{}
+	err := ui.RunDownUI("https://down-tencent.huorong.cn/sysdiag-all-x64-6.0.11.1-2026.07.28.1.exe", "H:\\测试区\\更新测试", "C123.exe")
+	if err != nil {
+		log.Fatalln(err)
+	}
 }
