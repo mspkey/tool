@@ -10,7 +10,10 @@ require (
 	gopkg.in/mail.v2 v2.3.1
 )
 
-require go.mongodb.org/mongo-driver/v2 v2.6.0
+require (
+	github.com/golang-jwt/jwt/v5 v5.3.1
+	go.mongodb.org/mongo-driver/v2 v2.6.0
+)
 
 require (
 	github.com/google/go-cmp v0.7.0 // indirect

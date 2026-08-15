@@ -2,11 +2,12 @@ package test
 
 import (
 	"fmt"
+	"github.com/mspkey/tool/bin"
 	"github.com/mspkey/tool/msp"
 	"github.com/mspkey/tool/sdk"
-	"github.com/mspkey/tool/bin"
 	"log"
 	"testing"
+	"time"
 )
 
 func TestAes256CbcEncryptDecrypt(t *testing.T) {
@@ -46,8 +47,6 @@ func TestSDK(t *testing.T) {
 	}
 
 	ms.QuickLogin()
-
-
 
 	err = ms.CarLogin("53e40bd6-64be-4f0c-87e4-b63fdaff1afc")
 	if err != nil {
@@ -89,11 +88,43 @@ func TestSDK(t *testing.T) {
 
 }
 
-
 func TestRunDownUI(t *testing.T) {
 	ui := &bin.ClientUI{}
 	err := ui.RunDownUI("https://down-tencent.huorong.cn/sysdiag-all-x64-6.0.11.1-2026.07.28.1.exe", "H:\\测试区\\更新测试", "C123.exe")
 	if err != nil {
 		log.Fatalln(err)
 	}
+}
+
+func TestToken(t *testing.T) {
+	type Osjwt struct {
+		Name string    `json:"Name"`
+		Pwd  string    `json:"Pwd"`
+		Age  int64     `json:"Age"`
+		Time time.Time `json:"Time"`
+	}
+
+	p := Osjwt{
+		Name: "张三",
+		Pwd:  "110110",
+		Age:  20,
+		Time: time.Now(),
+	}
+
+	util := msp.NewJwtUtil("test")
+	token, err := util.GenerateToken(p, 1*time.Minute)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(token)
+
+	//解析
+	po := msp.NewJwtUtil("test")
+	var os Osjwt
+	parseToken, err := po.ParseToken(token, &os)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(parseToken.Data)
+	fmt.Println(os)
 }
