@@ -1,6 +1,7 @@
 package test
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/mspkey/tool/bin"
 	"github.com/mspkey/tool/msp"
@@ -102,6 +103,7 @@ func TestToken(t *testing.T) {
 		Pwd  string    `json:"Pwd"`
 		Age  int64     `json:"Age"`
 		Time time.Time `json:"Time"`
+		Is   bool      `json:"Is"`
 	}
 
 	p := Osjwt{
@@ -109,6 +111,7 @@ func TestToken(t *testing.T) {
 		Pwd:  "110110",
 		Age:  20,
 		Time: time.Now(),
+		Is:   true,
 	}
 
 	util := msp.NewJwtUtil("test")
@@ -121,10 +124,18 @@ func TestToken(t *testing.T) {
 	//解析
 	po := msp.NewJwtUtil("test")
 	var os Osjwt
-	parseToken, err := po.ParseToken(token, &os)
+	parseToken, err := po.ParseToken(token)
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println(parseToken.Data)
+	marshal, err := json.Marshal(parseToken.Data)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = json.Unmarshal(marshal, &os)
+	if err != nil {
+		log.Fatal(err)
+	}
 	fmt.Println(os)
 }
