@@ -1,10 +1,6 @@
 package msp
 
 import (
-	"encoding/base64"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"github.com/golang-jwt/jwt/v5"
 	"time"
 )
@@ -20,55 +16,33 @@ func NewJwtUtil(secret string) *JwtUtil {
 }
 
 type CustomClaims struct {
-	Data string `json:"Data"`
+	Data any `json:"data"`
 	jwt.RegisteredClaims
 }
 
 // GenerateToken 传入任意结构体/map生成token
 func (j *JwtUtil) GenerateToken(payload any, expireDuration time.Duration) (string, error) {
-
-	marshal, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-
-	toString := base64.StdEncoding.EncodeToString(marshal)
+	t := time.Now()
 	claims := CustomClaims{
-		Data: toString,
+		Data: payload,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expireDuration)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(t.Add(expireDuration)),
+			IssuedAt:  jwt.NewNumericDate(t),
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(j.secret)
 }
 
-// ParseToken token解析 target 结构体指针
-func (j *JwtUtil) ParseToken(tokenStr string, target any) (*CustomClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenStr, &CustomClaims{}, func(token *jwt.Token) (any, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errors.New("不支持的签名算法")
-		}
+func (j *JwtUtil) ParseToken(tokenString string) (*CustomClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return j.secret, nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("token解析失败: %w", err)
-	}
-
-	claims, ok := token.Claims.(*CustomClaims)
-	if !ok || !token.Valid {
-		return nil, errors.New("token无效或过期")
-	}
-
-	decodeString, err := base64.StdEncoding.DecodeString(claims.Data)
-	if err != nil {
-		return nil, errors.New("base64 解析失败")
-	}
-
-	err = json.Unmarshal(decodeString, &target)
-	if err != nil {
 		return nil, err
 	}
-	return claims, nil
+	if claims, ok := token.Claims.(*CustomClaims); ok && token.Valid {
+		return claims, nil
+	}
+	return nil, jwt.ErrSignatureInvalid
 }
