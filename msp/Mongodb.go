@@ -99,8 +99,17 @@ func (c *MongoDB) InsertMany(collection string, document []interface{}) error {
 	return nil
 }
 
-// UpDate 更新数据 需要$set
-func (c *MongoDB) UpDate(collection string, find, update interface{}) error {
+// UpDateSetOne 更新数据 需要$set
+func (c *MongoDB) UpDateSetOne(collection string, find, update interface{}) error {
+	_, err := c.Client.Database(c.database).Collection(collection).UpdateOne(c.Ctx, find, update)
+	if err != nil {
+		return errors.New("数据更新失败")
+	}
+	return nil
+}
+
+// UpDateSetMany 更新数据 需要$set
+func (c *MongoDB) UpDateSetMany(collection string, find, update interface{}) error {
 
 	_, err := c.Client.Database(c.database).Collection(collection).UpdateMany(c.Ctx, find, update)
 	if err != nil {
@@ -108,6 +117,9 @@ func (c *MongoDB) UpDate(collection string, find, update interface{}) error {
 	}
 	return nil
 }
+
+
+
 
 // UpDateOne 更新数据单条 不需要$set
 func (c *MongoDB) UpDateOne(collection string, find, update interface{}) error {
