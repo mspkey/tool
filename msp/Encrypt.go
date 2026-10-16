@@ -2,27 +2,32 @@ package msp
 
 import (
 	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/rc4"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"	
-	"crypto/cipher"	
-	
+	"io"
+	"math/big"
+	"strings"
 )
 
-//Encrypt 加解密
+// Encrypt 加解密
 type Encrypt struct {
 	PublicKey  string
 	PrivateKey string
 }
 
-//Rc4DecodeString 用rc4进行解密
+// Rc4DecodeString 用rc4进行解密
 func (*Encrypt) Rc4DecodeString(key string, Base64Data string) ([]byte, error) {
 	decodeText, err := base64.StdEncoding.DecodeString(Base64Data)
 	if err != nil {
@@ -37,7 +42,7 @@ func (*Encrypt) Rc4DecodeString(key string, Base64Data string) ([]byte, error) {
 	return output, nil
 }
 
-//Rc4EncryptByte 用rc4进行加密或解密
+// Rc4EncryptByte 用rc4进行加密或解密
 func (*Encrypt) Rc4EncryptByte(key string, strData []byte) []byte {
 	cipher, err := rc4.NewCipher([]byte(key))
 	if err != nil {
@@ -48,7 +53,7 @@ func (*Encrypt) Rc4EncryptByte(key string, strData []byte) []byte {
 	return data
 }
 
-//Rc4EncryptString 用rc4进行加密 返回base64 格式数据
+// Rc4EncryptString 用rc4进行加密 返回base64 格式数据
 func (*Encrypt) Rc4EncryptString(key, strData string) string {
 	cipher, err := rc4.NewCipher([]byte(key))
 	if err != nil {
@@ -60,7 +65,7 @@ func (*Encrypt) Rc4EncryptString(key, strData string) string {
 	return encoded
 }
 
-//Md5Encrypt 用MD5进行加密
+// Md5Encrypt 用MD5进行加密
 func (*Encrypt) Md5Encrypt(str string) string {
 	if str == "" {
 		return ""
@@ -72,7 +77,7 @@ func (*Encrypt) Md5Encrypt(str string) string {
 }
 
 // RSACreatKey 用RSA 生成密钥对
-//bits 尽量长
+// bits 尽量长
 func (c *Encrypt) RSACreatKey(bits int) error {
 
 	privateKey, err := rsa.GenerateKey(rand.Reader, bits)
@@ -104,7 +109,7 @@ func (c *Encrypt) RSACreatKey(bits int) error {
 	return nil
 }
 
-//RSAEncrypt RSA加密
+// RSAEncrypt RSA加密
 // Data 要加密的数据
 // PuKey 公钥匙
 func (c *Encrypt) RSAEncrypt(Data []byte, PuKey string) ([]byte, error) {
@@ -125,7 +130,7 @@ func (c *Encrypt) RSAEncrypt(Data []byte, PuKey string) ([]byte, error) {
 
 }
 
-//RSADecrypt RSA解密
+// RSADecrypt RSA解密
 // Data 需要解密的byte数据
 // PiKey 私钥
 func (c *Encrypt) RSADecrypt(Data []byte, PiKey string) ([]byte, error) {
@@ -143,7 +148,7 @@ func (c *Encrypt) RSADecrypt(Data []byte, PiKey string) ([]byte, error) {
 	return plainText, nil
 }
 
-//EncryptAES AES加密
+// EncryptAES AES加密
 func (c *Encrypt) EncryptAES(key string, plaintext []byte) ([]byte, error) {
 	cipher, err := aes.NewCipher([]byte(key))
 	if err != nil {
@@ -196,7 +201,7 @@ func pkcs7Unpad(data []byte) ([]byte, error) {
 // Aes256CbcEncrypt AES-256-CBC 加密
 // key：必须32字节
 // 返回 base64(IV + 密文)
-func (c *Encrypt)Aes256CbcEncrypt(plainText, key []byte) (string, error) {
+func (c *Encrypt) Aes256CbcEncrypt(plainText, key []byte) (string, error) {
 	if len(key) != 32 {
 		return "", errors.New("AES256密钥必须32字节")
 	}
@@ -223,7 +228,7 @@ func (c *Encrypt)Aes256CbcEncrypt(plainText, key []byte) (string, error) {
 }
 
 // Aes256CbcDecrypt AES-256-CBC 解密
-func (c *Encrypt)Aes256CbcDecrypt(cipherBase64 string, key []byte) ([]byte, error) {
+func (c *Encrypt) Aes256CbcDecrypt(cipherBase64 string, key []byte) ([]byte, error) {
 	if len(key) != 32 {
 		return nil, errors.New("AES256密钥必须32字节")
 	}
@@ -249,4 +254,127 @@ func (c *Encrypt)Aes256CbcDecrypt(cipherBase64 string, key []byte) ([]byte, erro
 	decryptMode.CryptBlocks(plainPadded, cipherText)
 
 	return pkcs7Unpad(plainPadded)
+}
+
+// ECDSACreatKey 生成易语言格式的ECDSA(P256)密钥对
+// 公钥hex: 4543533120000000("ECS1 ") + X(32) + Y(32)
+// 私钥hex: 4543533220000000("ECS2 ") + X(32) + Y(32) + D(32)
+func (c *Encrypt) ECDSACreatKey() error {
+	priKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return err
+	}
+
+	x := priKey.X.Bytes()
+	y := priKey.Y.Bytes()
+	d := priKey.D.Bytes()
+
+	// 补齐到32字节
+	pad := func(b []byte) []byte {
+		out := make([]byte, 32)
+		copy(out[32-len(b):], b)
+		return out
+	}
+	x, y, d = pad(x), pad(y), pad(d)
+
+	// 公钥: 头部 + X + Y
+	pub := append([]byte{0x45, 0x43, 0x53, 0x31, 0x20, 0x00, 0x00, 0x00}, append(x, y...)...)
+	c.PublicKey = strings.ToUpper(hex.EncodeToString(pub))
+
+	// 私钥: 头部 + X + Y + D
+	pri := append([]byte{0x45, 0x43, 0x53, 0x32, 0x20, 0x00, 0x00, 0x00}, append(x, append(y, d...)...)...)
+	c.PrivateKey = strings.ToUpper(hex.EncodeToString(pri))
+
+	return nil
+}
+
+// ECDSASign 用私钥对数据签名
+// priHex 易语言私钥hex，8字节头部("ECS2 ")后为 X(32)+Y(32)+D(32)
+// 返回 base64(r||s)，r、s 各32字节
+func (c *Encrypt) ECDSASign(priHex string, data []byte) (string, error) {
+	// 1. 解码私钥hex
+	priBytes, err := hex.DecodeString(priHex)
+	if err != nil {
+		return "", errors.New("私钥hex解码失败")
+	}
+
+	// 去掉8字节头部，剩余 X(32)+Y(32)+D(32)
+	priRaw := priBytes[8:]
+	if len(priRaw) != 96 {
+		return "", errors.New("私钥长度不对")
+	}
+
+	x := new(big.Int).SetBytes(priRaw[:32])
+	y := new(big.Int).SetBytes(priRaw[32:64])
+	d := new(big.Int).SetBytes(priRaw[64:])
+	priKey := &ecdsa.PrivateKey{
+		PublicKey: ecdsa.PublicKey{
+			Curve: elliptic.P256(),
+			X:     x,
+			Y:     y,
+		},
+		D: d,
+	}
+
+	// 2. SHA256哈希原文
+	hash := sha256.Sum256(data)
+
+	// 3. ECDSA签名
+	r, s, err := ecdsa.Sign(rand.Reader, priKey, hash[:])
+	if err != nil {
+		return "", err
+	}
+
+	// 4. r、s各补齐32字节拼接后base64
+	sig := make([]byte, 64)
+	r.FillBytes(sig[:32])
+	s.FillBytes(sig[32:])
+	return base64.StdEncoding.EncodeToString(sig), nil
+}
+
+// ECDSAVerify 验签
+func (c *Encrypt) ECDSAVerify(pubHex string, sigB64 string, data []byte) (bool, error) {
+	// 1. 解码公钥hex
+	pubBytes, err := hex.DecodeString(pubHex)
+	if err != nil {
+		return false, errors.New("公钥hex解码失败")
+	}
+
+	// 👉 重点：易语言这个公钥头部有 "ECS1 " (4543533120 是 ECS1 空格)，是自定义头部！
+	// 去掉前面 8 字节头部：4543533120000000，后面才是 P256 的 X,Y 坐标（32+32=64字节）
+	pubRaw := pubBytes[8:]
+	if len(pubRaw) != 64 {
+		return false, errors.New("公钥XY长度不对")
+	}
+
+	x := new(big.Int).SetBytes(pubRaw[:32])
+	y := new(big.Int).SetBytes(pubRaw[32:])
+	pubKey := &ecdsa.PublicKey{
+		Curve: elliptic.P256(),
+		X:     x,
+		Y:     y,
+	}
+
+	// 2. base64解码签名
+	sigBytes, err := base64.StdEncoding.DecodeString(sigB64)
+	if err != nil {
+		return false, errors.New("签名base64解码失败")
+	}
+	if len(sigBytes) != 64 {
+		fmt.Printf("签名长度不是64字节，len=%d\n", len(sigBytes))
+		return false, errors.New("签名长度不是64字节")
+	}
+	r := new(big.Int).SetBytes(sigBytes[:32])
+	s := new(big.Int).SetBytes(sigBytes[32:])
+
+	// 3. SHA256哈希原文
+	hash := sha256.Sum256(data)
+
+	// 4. ECDSA验签
+	ok := ecdsa.Verify(pubKey, hash[:], r, s)
+	if ok {
+		return true, nil
+	}
+
+	return false, errors.New("ECDSA验签失败")
 }

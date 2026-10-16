@@ -1,141 +1,69 @@
 package test
 
 import (
-	"encoding/json"
 	"fmt"
-	"github.com/mspkey/tool/bin"
-	"github.com/mspkey/tool/msp"
-	"github.com/mspkey/tool/sdk"
-	"log"
 	"testing"
-	"time"
+
+	"github.com/mspkey/tool/msp"
 )
 
-func TestAes256CbcEncryptDecrypt(t *testing.T) {
-	encrypt := msp.Encrypt{}
-	// AES256 密钥：严格32字节
-	aes256Key := []byte("646e0cdba20867821d3cc05000000000")
-	originText := []byte("测试AES256-CBC跨语言加密内容")
-	//646e0cdba20867821d3cc050
-	// 加密
-	encStr, err := encrypt.Aes256CbcEncrypt(originText, aes256Key)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("加密Base64：", encStr)
+func TestEscad(t *testing.T) {
+	//私钥
+	//spi:="45435332200000005674EB7F57EF2694B2437A1ED91DD09B1C4E18984C606F8BF39A98F5E9F5674CFB1E9280F7CF8E0D6C71AE136ACF5F4E4B4F18F5B6FCBB27A9912174C188A6EF354E7F806B0439E03347D99C44E994FBCCE0190468D44BD0B16EF7C4065CEA3A"
+	// 易语言公钥十六进制
+	pubHex := "45435331200000005674EB7F57EF2694B2437A1ED91DD09B1C4E18984C606F8BF39A98F5E9F5674CFB1E9280F7CF8E0D6C71AE136ACF5F4E4B4F18F5B6FCBB27A9912174C188A6EF"
+	// 签名base64
+	sigB64 := "llQnIoV5fqoZqd/OECT7Nz145weNysm8aMCKP1ndqWUKl2rPFaSCIpJ2XHEhUb513X/tFra9HqWGr6mbNIjM/w=="
+	// 原始数据
+	data := []byte(`{ExeID:110110}`)
 
-	// 解密
-	decByte, err := encrypt.Aes256CbcDecrypt(encStr, aes256Key)
+	verify, err := (&msp.Encrypt{}).ECDSAVerify(pubHex, sigB64, data)
 	if err != nil {
-		panic(err)
+		t.Error(err)
 	}
-	fmt.Println("解密明文：", string(decByte))
+	t.Log(verify)
 }
 
-func TestSDK(t *testing.T) {
-	DevID := sdk.GetDevID()
-	cfg := sdk.Config{
-		IP:       "127.0.0.1:8820",
-		ExeID:    "65bc7fe8defb0198aac98e3e",
-		Version:  "1.0.0",
-		DevID:    DevID,
-		AdminKey: "646e0cdba20867821d3cc050",
-	}
-	ms := sdk.MspKey{}
-	err := ms.Init(cfg)
+func TestEscadSign(t *testing.T) {
+	//私钥
+	priHex := "45435332200000005674EB7F57EF2694B2437A1ED91DD09B1C4E18984C606F8BF39A98F5E9F5674CFB1E9280F7CF8E0D6C71AE136ACF5F4E4B4F18F5B6FCBB27A9912174C188A6EF354E7F806B0439E03347D99C44E994FBCCE0190468D44BD0B16EF7C4065CEA3A"
+	// 易语言公钥十六进制
+	pubHex := "45435331200000005674EB7F57EF2694B2437A1ED91DD09B1C4E18984C606F8BF39A98F5E9F5674CFB1E9280F7CF8E0D6C71AE136ACF5F4E4B4F18F5B6FCBB27A9912174C188A6EF"
+	// 原始数据
+	data := []byte(`{ExeID:110110}`)
+
+	// 签名
+	sigB64, err := (&msp.Encrypt{}).ECDSASign(priHex, data)
 	if err != nil {
-		log.Fatalln(err)
+		t.Error(err)
 	}
 
-	ms.QuickLogin()
-
-	err = ms.CarLogin("53e40bd6-64be-4f0c-87e4-b63fdaff1afc")
+	fmt.Println(sigB64)
+	// 验签
+	verify, err := (&msp.Encrypt{}).ECDSAVerify(pubHex, sigB64, data)
 	if err != nil {
-		log.Fatalln(err)
+		t.Error(err)
 	}
-
-	auth, err := ms.VmpAuth()
-	if err != nil {
-		log.Fatalln(err)
-	}
-	fmt.Println("<UNK>", auth)
-
-	//data, err := ms.GetVariable("X70h_401000")
-	//if err != nil {
-	//	log.Fatalln(err)
-	//}
-	//log.Println("<UNK>", string(data))
-
-	//err = ms.GetUserInfo()
-	//if err != nil {
-	//	log.Fatalln(err)
-	//}
-
-	//err = ms.Login("test123", "test123")
-	//if err != nil {
-	//	log.Fatalln(err)
-	//}
-
-	//err = ms.QuickLogin()
-	//if err != nil {
-	//	log.Fatalln(err)
-	//}
-	//
-	//info, err := ms.GetExeInfo()
-	//if err != nil {
-	//	log.Fatalln(err)
-	//}
-	//fmt.Println("<UNK>", info)
-
+	t.Log(verify)
 }
 
-func TestRunDownUI(t *testing.T) {
-	ui := &bin.ClientUI{}
-	err := ui.RunDownUI("https://down-tencent.huorong.cn/sysdiag-all-x64-6.0.11.1-2026.07.28.1.exe", "H:\\测试区\\更新测试", "C123.exe")
-	if err != nil {
-		log.Fatalln(err)
+func TestEscadCreatKey(t *testing.T) {
+	e := &msp.Encrypt{}
+	if err := e.ECDSACreatKey(); err != nil {
+		t.Error(err)
 	}
-}
+	fmt.Println("公钥:", e.PublicKey)
+	fmt.Println("私钥:", e.PrivateKey)
 
-func TestToken(t *testing.T) {
-	type Osjwt struct {
-		Name string    `json:"Name"`
-		Pwd  string    `json:"Pwd"`
-		Age  int64     `json:"Age"`
-		Time time.Time `json:"Time"`
-		Is   bool      `json:"Is"`
-	}
-
-	p := Osjwt{
-		Name: "张三",
-		Pwd:  "110110",
-		Age:  20,
-		Time: time.Now(),
-		Is:   true,
-	}
-
-	util := msp.NewJwtUtil("test")
-	token, err := util.GenerateToken(p, 1*time.Minute)
+	// 用生成的密钥对签名验签
+	data := []byte(`{ExeID:110110}`)
+	sigB64, err := e.ECDSASign(e.PrivateKey, data)
 	if err != nil {
-		log.Fatal(err)
+		t.Error(err)
 	}
-	fmt.Println(token)
-
-	//解析
-	po := msp.NewJwtUtil("test")
-	var os Osjwt
-	parseToken, err := po.ParseToken(token)
+	verify, err := e.ECDSAVerify(e.PublicKey, sigB64, data)
 	if err != nil {
-		log.Fatal(err)
+		t.Error(err)
 	}
-	fmt.Println(parseToken.Data)
-	marshal, err := json.Marshal(parseToken.Data)
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = json.Unmarshal(marshal, &os)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(os)
+	t.Log(verify)
 }
