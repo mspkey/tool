@@ -333,18 +333,18 @@ func (c *Encrypt) ECDSASign(priHex string, data []byte) (string, error) {
 }
 
 // ECDSAVerify 验签
-func (c *Encrypt) ECDSAVerify(pubHex string, sigB64 string, data []byte) (bool, error) {
+func (c *Encrypt) ECDSAVerify(pubHex string, sigB64 string, data []byte) error {
 	// 1. 解码公钥hex
 	pubBytes, err := hex.DecodeString(pubHex)
 	if err != nil {
-		return false, errors.New("公钥hex解码失败")
+		return errors.New("公钥hex解码失败")
 	}
 
 	// 👉 重点：易语言这个公钥头部有 "ECS1 " (4543533120 是 ECS1 空格)，是自定义头部！
 	// 去掉前面 8 字节头部：4543533120000000，后面才是 P256 的 X,Y 坐标（32+32=64字节）
 	pubRaw := pubBytes[8:]
 	if len(pubRaw) != 64 {
-		return false, errors.New("公钥XY长度不对")
+		return errors.New("公钥XY长度不对")
 	}
 
 	x := new(big.Int).SetBytes(pubRaw[:32])
@@ -358,11 +358,11 @@ func (c *Encrypt) ECDSAVerify(pubHex string, sigB64 string, data []byte) (bool, 
 	// 2. base64解码签名
 	sigBytes, err := base64.StdEncoding.DecodeString(sigB64)
 	if err != nil {
-		return false, errors.New("签名base64解码失败")
+		return errors.New("签名base64解码失败")
 	}
 	if len(sigBytes) != 64 {
 		fmt.Printf("签名长度不是64字节，len=%d\n", len(sigBytes))
-		return false, errors.New("签名长度不是64字节")
+		return errors.New("签名长度不是64字节")
 	}
 	r := new(big.Int).SetBytes(sigBytes[:32])
 	s := new(big.Int).SetBytes(sigBytes[32:])
@@ -373,8 +373,8 @@ func (c *Encrypt) ECDSAVerify(pubHex string, sigB64 string, data []byte) (bool, 
 	// 4. ECDSA验签
 	ok := ecdsa.Verify(pubKey, hash[:], r, s)
 	if ok {
-		return true, nil
+		return nil
 	}
 
-	return false, errors.New("ECDSA验签失败")
+	return errors.New("ECDSA验签失败")
 }
