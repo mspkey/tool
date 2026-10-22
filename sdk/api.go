@@ -995,6 +995,17 @@ func (m *MspkeyPro) GetUserInfo() (*UserInfo, error) {
 	return &ui, nil
 }
 
+// AddBlack 添加设备黑名单（服务端添加成功后会返回 409 强制下线）
+func (m *MspkeyPro) AddBlack(bak, deviceID, userID string) error {
+	_, err := m.doPost("AddBlack", map[string]string{
+		"Bak":      bak,
+		"ExeID":    m.ExeID,
+		"DeviceID": deviceID,
+		"UserID":   userID,
+	})
+	return err
+}
+
 // Detection 环境检测上报
 func (m *MspkeyPro) Detection(token string) error {
 	if err := m.requireLogin(); err != nil {
