@@ -1,33 +1,33 @@
 package sdk
 
 import (
-	"go.mongodb.org/mongo-driver/v2/bson"
 	"time"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-const LockHost = "127.0.0.1:8810"
+const LockHost = "127.0.0.1:8820"
 
-type resJson struct {
-	Tag  string `json:"Tag" bson:"Tag"`
-	Code int    `json:"Code" bson:"Code"`
-	Msg  string `json:"Msg" bson:"Msg"`
-	Data any    `json:"Data" bson:"Data"`
-	Time string `json:"Time" bson:"Time"`
-}
+// 客户端/服务端 ECDSA 密钥对（易语言格式 P256）
+// 客户端签名私钥 → 服务端用 db.PublicKey 验签
+// 服务端签名私钥 → 客户端用 ServerPublicKey 验签
+const (
+	// ClientPrivateKey 客户端 ECDSA 私钥 hex，用于对登录请求签名
+	ClientPrivateKey = "4543533220000000109E1D054FBA51D4BCAA604F7744FF74F60C5967AAA0C45B5E27C65E6688A7F76DD35185EC3424E56910057EF8F8F95C66BB3233FE481B339E8671E14C6A5AE885EFA923812601F86F04D0BC1F452E19B0B36074959429EB9706210D80FEBA77"
 
-type sendJson struct {
-	Type string `json:"Type" bson:"Type"`
-	Data any    `json:"Data" bson:"Data"`
-	Time string `json:"Time"`
-}
+	// ServerPublicKey 服务端 ECDSA 公钥 hex，用于验签服务端下发数据
+	ServerPublicKey = "4543533120000000E91A523F50E7296C4AF23489E596346E5F7884162DA4AE95BDA6E0C8AB919BC2D8310F4AF574768C80924208D98BEB35914E992406AB7D73210DDB214E5BB465"
+
+)
 
 type Config struct {
-	IP       string //服务器IP
-	ExeID    string //软件ID
-	Version  string //当前版本
-	DevID    string //设备ID
-	AdminKey string //密钥
-	ExeMD5   string //软件的md5值
+	IP           string // 服务器IP，如 127.0.0.1:8810
+	ExeID        string // 软件ID
+	Version      string // 当前版本
+	DevID        string // 设备ID
+	AdminKey     string // 管理员 ID (ObjectID hex)，服务端用它 RC4 加密登录/ExeInfo 响应
+	ServerPubKey string // 服务端 ECDSA 公钥 hex，用于验签服务端下发数据
+	ExeMD5       string // 软件的 md5 值，可选
 }
 
 // ExeInfo 软件
@@ -115,27 +115,3 @@ type AuthData struct {
 	SN      string    //用于校验
 	Sig     string
 }
-
-// tagCode 验证码
-const tagDevKey = "DevKey"
-const tagCode = "GetCode"
-const tagExe = "GetExeInfo"
-const tagRegister = "Register"
-const tagLogin = "Login"
-const tagCarLogin = "CarLogin"
-const tagUserPay = "UserPay"
-const tagUpUserPwd = "UpUserPwd"
-const tagBindDeviceID = "BindDeviceID"
-const tagAddBlack = "AddBlack"
-const tagUserInfo = "GetUserInfo"
-const tagSetUerConf = "SetUerConf"
-const tagExeData = "GetExeData"
-const tagVariable = "GetVariable"
-const tagAdminPay = "GetAdminPay"
-const tagCar = "FindCarInfo"
-const tagAliPayCreate = "AliPayCreate"
-const tagCompletePayment = "isCompletePayment"
-const tagPing = "Ping"
-const tagQuick = "QuickLogin"
-const tagVMPAuth = "VMPAuth"
-const tagCkLogin = "CKLogin"
