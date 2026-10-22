@@ -497,18 +497,19 @@ func (m *MspkeyPro) ScanQrcode() error {
 	defer ticker.Stop()
 
 	fmt.Println("[ScanQrcode] 等待扫码登录中...")
-	for {
+	for true {
 		select {
 		case <-ticker.C:
 			if time.Now().After(deadline) {
 				return errors.New("扫码登录超时")
 			}
 			if err := m.QuickLogin(nonce); err == nil {
-				fmt.Printf("[ScanQrcode] 登录成功  UserID=%s\n", m.UserID)
+				fmt.Printf("[ScanQrcode] 登录成功\n")
 				return nil
 			}
 		}
 	}
+	return errors.New("扫码登录超时")
 }
 
 // openBrowser 跨平台用默认浏览器打开 URL
