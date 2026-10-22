@@ -42,6 +42,13 @@ type MspkeyPro struct {
 	SessionKey string
 	UserID     string
 
+	// 软件信息（Init 后自动缓存）
+	ExeInfo *GetExeInfoResp
+
+	// 心跳
+	heartInterval time.Duration
+	heartStop     chan struct{}
+
 	httpClient *http.Client
 	encrypt    *msp.Encrypt
 }
@@ -94,6 +101,25 @@ func (m *MspkeyPro) Init(cfg Config) error {
 	m.ExeMD5 = cfg.ExeMD5
 	m.httpClient = &http.Client{Timeout: 30 * time.Second}
 	m.encrypt = &msp.Encrypt{}
+
+	// 自动获取软件信息（缓存 + 填充 AdminKey / 心跳间隔）
+	info, err := m.GetExeInfo()
+	if err != nil {
+		return fmt.Errorf("Init: 获取软件信息失败: %w", err)
+	}
+	m.ExeInfo = info
+
+	// 若外部未传 AdminKey，用软件信息里的 AdminID（ObjectID hex）
+	if m.AdminKey == "" && !info.AdminID.IsZero() {
+		m.AdminKey = info.AdminID.Hex()
+	}
+
+	// 心跳间隔：HatInterval 是分，默认 30 秒
+	if info.HatInterval > 0 {
+		m.heartInterval = time.Duration(info.HatInterval) * time.Minute
+	} else {
+		m.heartInterval = 30 * time.Second
+	}
 
 	return nil
 }
@@ -336,6 +362,7 @@ func (m *MspkeyPro) Login(name, pwd string) error {
 	m.SessionId = ld.SessionId
 	m.SessionKey = ld.SessionKey
 	m.UserID = ld.UserID
+	m.startHeart()
 	return nil
 }
 
@@ -383,6 +410,7 @@ func (m *MspkeyPro) CarLogin(serial string) error {
 	m.SessionId = ld.SessionId
 	m.SessionKey = ld.SessionKey
 	m.UserID = ld.UserID
+	m.startHeart()
 	return nil
 }
 
@@ -440,6 +468,7 @@ func (m *MspkeyPro) QuickLogin(nonce string) error {
 	m.SessionId = ld.SessionId
 	m.SessionKey = ld.SessionKey
 	m.UserID = ld.UserID
+	m.startHeart()
 	return nil
 }
 
@@ -509,6 +538,7 @@ func (m *MspkeyPro) Logout() error {
 
 // logoutNow 仅清理本地登录态（不通知服务端，用于强制下线/退出时）
 func (m *MspkeyPro) logoutNow() error {
+	m.stopHeart()
 	m.SessionId = ""
 	m.SessionKey = ""
 	m.UserID = ""
@@ -988,4 +1018,59 @@ func (m *MspkeyPro) Ping() (pushMsg string, err error) {
 	}
 	_ = json.Unmarshal(ar.Data, &box)
 	return box.PushMsg, nil
+}
+
+// ========================== 心跳 ==========================
+
+// startHeart 启动心跳 goroutine（登录成功后自动调用）
+// 若之前已在运行，先停掉旧的
+// 服务器判定：超过 30 分钟无心跳则强制离线
+func (m *MspkeyPro) startHeart() {
+	m.stopHeart()
+	m.heartStop = make(chan struct{})
+	interval := m.heartInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	const heartTimeout = 30 * time.Minute
+	lastOK := time.Now() // 登录成功即视为一次"成功"
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.heartStop:
+				return
+			case <-ticker.C:
+				if m.SessionId == "" {
+					return
+				}
+				// 超时兜底：距上次成功心跳已超过 30 分钟
+				if time.Since(lastOK) > heartTimeout {
+					// 允许离线 → 停心跳，程序继续跑（不强制退出）
+					if m.ExeInfo != nil && m.ExeInfo.IsSafeQuit {
+						fmt.Fprintf(os.Stderr, "[heart] 心跳超时：%v 无成功响应，IsSafeQuit=true 允许离线，停止心跳\n", time.Since(lastOK))
+						m.stopHeart()
+						return
+					}
+					// 不允许离线 → 退出
+					fmt.Fprintf(os.Stderr, "[heart] 心跳超时：%v 无成功响应，IsSafeQuit=false 强制退出\n", time.Since(lastOK))
+					m.logoutNow()
+					os.Exit(1)
+				}
+				if _, err := m.Ping(); err == nil {
+					lastOK = time.Now()
+				}
+			}
+		}
+	}()
+}
+
+// stopHeart 停止心跳 goroutine
+func (m *MspkeyPro) stopHeart() {
+	if m.heartStop != nil {
+		close(m.heartStop)
+		m.heartStop = nil
+	}
 }
