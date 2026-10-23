@@ -32,7 +32,7 @@ type MspkeyPro struct {
 	ServerURL    string // 服务器基地址，如 http://127.0.0.1:8810
 	ExeID        string // 软件 ID (ObjectID hex)
 	DeviceID     string // 设备 ID
-	AdminKey     string // 管理员 ID (ObjectID hex)，服务端用它 RC4 加密登录/ExeInfo 响应
+	AdminID      string // 管理员 ID (ObjectID hex)，服务端用它 RC4 加密登录/ExeInfo 响应
 	ServerPubKey string // 服务端 ECDSA 公钥 hex，验签下发数据用
 	Version      string // 客户端版本号，可选
 	ExeMD5       string // 软件 MD5，可选
@@ -64,8 +64,7 @@ type MspkeyPro struct {
 //	    ExeID:        "65bc7fe8defb0198aac98e3e",
 //	    Version:      "1.0.0",
 //	    DevID:        DevID,
-//	    AdminKey:     "...", // Admin ObjectID hex
-//	    ServerPubKey: sdk.ServerPublicKey,
+//	    AdminID:      "...", // Admin ObjectID hex
 //	})
 func (m *MspkeyPro) Init(cfg Config) error {
 	if cfg.ExeID == "" {
@@ -92,26 +91,48 @@ func (m *MspkeyPro) Init(cfg Config) error {
 	m.ServerURL = scheme + "://" + strings.TrimRight(ip, "/")
 	m.ExeID = cfg.ExeID
 	m.DeviceID = cfg.DevID
-	m.AdminKey = cfg.AdminKey
-	m.ServerPubKey = cfg.ServerPubKey
-	if m.ServerPubKey == "" {
-		m.ServerPubKey = ServerPublicKey
-	}
+	m.AdminID = cfg.AdminID
+
+	m.ServerPubKey = ServerPublicKey
+
 	m.Version = cfg.Version
-	m.ExeMD5 = cfg.ExeMD5
+	m.ExeMD5 = msp.GetExeMD5()
 	m.httpClient = &http.Client{Timeout: 30 * time.Second}
 	m.encrypt = &msp.Encrypt{}
 
 	// 自动获取软件信息（缓存 + 填充 AdminKey / 心跳间隔）
 	info, err := m.GetExeInfo()
 	if err != nil {
-		return fmt.Errorf("Init: 获取软件信息失败: %w", err)
+		return fmt.Errorf(`init: 获取软件信息失败: %w`, err)
 	}
 	m.ExeInfo = info
 
-	// 若外部未传 AdminKey，用软件信息里的 AdminID（ObjectID hex）
-	if m.AdminKey == "" && !info.AdminID.IsZero() {
-		m.AdminKey = info.AdminID.Hex()
+	//判断软件版本号是否需要强制更新
+	if m.Version != info.Versions && info.IsUpDate {
+		fmt.Printf("软件版本不一致，软件需要更新，当前版本：%s，最新版本：%s\n", m.Version, info.Versions)
+
+		//打开游览器更新页面
+		if info.Address != "" {
+			openBrowser(info.Address)
+		}
+		// 强制更新，程序退出
+		os.Exit(1)
+		m.AddBlack("绕过退出函数")
+		return fmt.Errorf("软件版本不一致，软件需要更新")
+	}
+
+	//判断软件MD5是否一致
+	if m.ExeMD5 != info.Md5 && info.IsUpDate {
+		fmt.Printf("软件资源不一致，软件需要更新\n")
+
+		//打开游览器更新页面
+		if info.Address != "" {
+			openBrowser(info.Address)
+		}
+		// 强制更新，程序退出
+		os.Exit(1)
+		m.AddBlack("绕过退出函数")
+		return fmt.Errorf("软件资源不一致，需要强制更新")
 	}
 
 	// 心跳间隔：HatInterval 是分，默认 30 秒
@@ -252,11 +273,11 @@ func (m *MspkeyPro) GetExeInfo() (*GetExeInfoResp, error) {
 		return nil, err
 	}
 
-	if m.AdminKey == "" {
+	if m.AdminID == "" {
 		return nil, errors.New("尚未配置 AdminKey")
 	}
 
-	plain, err := m.encrypt.Rc4DecodeString(m.AdminKey, box.EncryptString)
+	plain, err := m.encrypt.Rc4DecodeString(m.AdminID, box.EncryptString)
 	if err != nil {
 		return nil, fmt.Errorf("RC4 解密失败: %w", err)
 	}
@@ -351,10 +372,10 @@ func (m *MspkeyPro) Login(name, pwd string) error {
 		return err
 	}
 
-	if m.AdminKey == "" {
+	if m.AdminID == "" {
 		return errors.New("未配置 AdminID，无法解密登录响应")
 	}
-	ld, err := m.decryptLoginResp(box.EncryptString, m.AdminKey)
+	ld, err := m.decryptLoginResp(box.EncryptString, m.AdminID)
 	if err != nil {
 		return err
 	}
@@ -399,10 +420,10 @@ func (m *MspkeyPro) CarLogin(serial string) error {
 		return err
 	}
 
-	if m.AdminKey == "" {
+	if m.AdminID == "" {
 		return errors.New("未配置 AdminID，无法解密登录响应")
 	}
-	ld, err := m.decryptLoginResp(box.EncryptString, m.AdminKey)
+	ld, err := m.decryptLoginResp(box.EncryptString, m.AdminID)
 	if err != nil {
 		return err
 	}
@@ -458,10 +479,10 @@ func (m *MspkeyPro) QuickLogin(nonce string) error {
 		return err
 	}
 
-	if m.AdminKey == "" {
+	if m.AdminID == "" {
 		return errors.New("未配置 AdminID")
 	}
-	ld, err := m.decryptLoginResp(box.EncryptString, m.AdminKey)
+	ld, err := m.decryptLoginResp(box.EncryptString, m.AdminID)
 	if err != nil {
 		return err
 	}
@@ -1009,6 +1030,29 @@ func (m *MspkeyPro) AddBlack(bak string) error {
 
 // Detection 环境检测上报
 func (m *MspkeyPro) Detection(token string) error {
+
+	//环境云检测
+	type UserConfig struct {
+		ExeID    string `json:"ExeID"`    //软件ID
+		DeviceID string `json:"DeviceID"` //设备ID
+		Version  string `json:"Version"`  //版本
+		ExeMD5   string `json:"ExeMD5"`   //软件MD5
+		AdminID  string `json:"AdminID"`  //管理员密钥
+		CRCOld   string `json:"CRCOld"`   //CRC旧的
+		CRCNew   string `json:"CRCNew"`   //CRC新的
+	}
+	var p UserConfig = UserConfig{
+		ExeID:    m.ExeID,
+		DeviceID: m.DeviceID,
+		Version:  m.Version,
+		ExeMD5:   m.ExeMD5,
+		AdminID:  m.AdminID,
+		CRCOld:   m.ExeMD5,
+		CRCNew:   msp.GetExeMD5(),
+	}
+	pJson, _ := json.Marshal(p)
+	token = (&msp.Encrypt{}).Rc4EncryptString(m.UserID, string(pJson))
+
 	if err := m.requireLogin(); err != nil {
 		return err
 	}

@@ -25,9 +25,7 @@ type Config struct {
 	ExeID        string // 软件ID
 	Version      string // 当前版本
 	DevID        string // 设备ID
-	AdminKey     string // 管理员 ID (ObjectID hex)，服务端用它 RC4 加密登录/ExeInfo 响应
-	ServerPubKey string // 服务端 ECDSA 公钥 hex，用于验签服务端下发数据
-	ExeMD5       string // 软件的 md5 值，可选
+	AdminID     string // 管理员 ID (ObjectID hex)，服务端用它 RC4 加密登录/ExeInfo 响应
 }
 
 // ExeInfo 软件
