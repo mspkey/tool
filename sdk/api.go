@@ -2,19 +2,14 @@ package sdk
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
-	"os/exec"
-	"os/signal"
-	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/mspkey/tool/msp"
@@ -25,6 +20,51 @@ import (
 
 // jwtKeyInternal 与服务端 db.JwtKey 一致，登录请求外层 RC4 固定密钥
 const jwtKeyInternal = "MspKeyPro"
+
+const LockHost = "127.0.0.1:8820"
+
+const (
+	// ClientPrivateKey 客户端 ECDSA 私钥 hex，用于对登录请求签名
+	ClientPrivateKey = "4543533220000000109E1D054FBA51D4BCAA604F7744FF74F60C5967AAA0C45B5E27C65E6688A7F76DD35185EC3424E56910057EF8F8F95C66BB3233FE481B339E8671E14C6A5AE885EFA923812601F86F04D0BC1F452E19B0B36074959429EB9706210D80FEBA77"
+
+	// ServerPublicKey 服务端 ECDSA 公钥 hex，用于验签服务端下发数据
+	ServerPublicKey = "4543533120000000E91A523F50E7296C4AF23489E596346E5F7884162DA4AE95BDA6E0C8AB919BC2D8310F4AF574768C80924208D98BEB35914E992406AB7D73210DDB214E5BB465"
+)
+
+type Config struct {
+	IP      string // 服务器IP，如 127.0.0.1:8810
+	ExeID   string // 软件ID
+	Version string // 当前版本
+	DevID   string // 设备ID
+	AdminID string // 管理员 ID (ObjectID hex)，服务端用它 RC4 加密登录/ExeInfo 响应
+}
+
+// UserInfo 用户
+type UserInfo struct {
+	ID            bson.ObjectID `json:"ID" bson:"_id"`                      //用户ID
+	AdminID       bson.ObjectID `json:"AdminID" bson:"AdminID"`             //管理员ID
+	AgentID       bson.ObjectID `json:"AgentID" bson:"AgentID"`             //代理ID
+	DeviceID      string        `json:"DeviceID" bson:"DeviceID"`           //设备ID
+	DkCount       int64         `json:"DkCount" bson:"DkCount"`             //多开数量设定0=无限多开 默认为3 最大为100
+	ExeID         bson.ObjectID `json:"ExeID" bson:"ExeID"`                 //绑定的软件
+	Name          string        `json:"Name" bson:"Name"`                   //用户名
+	Pwd           string        `json:"Pwd" bson:"Pwd"`                     //密码
+	Level         int64         `json:"Level" bson:"Level"`                 //用户等级 0=小时卡 1=天卡 2=周卡 3=月卡 4=季卡 5=半年卡 6=年卡 7=永久卡
+	Serial        string        `json:"Serial" bson:"Serial"`               //最后一次充值的卡号
+	State         bool          `json:"State" bson:"State"`                 //状态
+	Online        bool          `json:"Online" bson:"Online"`               //在线状态
+	RegIP         string        `json:"RegIP" bson:"RegIP"`                 //注册ip
+	RegTime       time.Time     `json:"RegTime" bson:"RegTime"`             //注册时间
+	EndTime       time.Time     `json:"EndTime" bson:"EndTime"`             //到期时间
+	LoginIP       string        `json:"LoginIP" bson:"LoginIP"`             //登录ip
+	LastLoginIP   string        `json:"LastLoginIP" bson:"LastLoginIP"`     //上一次登录ip
+	LoginTime     time.Time     `json:"LoginTime" bson:"LoginTime"`         //登录时间
+	LastLoginTime time.Time     `json:"LastLoginTime" bson:"LastLoginTime"` //上一次登录时间
+	Bak           string        `json:"Bak" bson:"Bak"`                     //备注
+	BindCont      int64         `json:"BindCont" bson:"BindCont"`           //当前用户换绑次数
+	BindTime      time.Time     `json:"BindTime" bson:"BindTime"`           //换绑的时间
+	Conf          string        `json:"Conf" bson:"Conf"`                   //用户配置信息
+}
 
 // MspkeyPro SDK 客户端，初始化后调用各业务接口
 type MspkeyPro struct {
@@ -113,7 +153,7 @@ func (m *MspkeyPro) Init(cfg Config) error {
 
 		//打开游览器更新页面
 		if info.Address != "" {
-			openBrowser(info.Address)
+			_ = msp.OpenBrowser(info.Address)
 		}
 		// 强制更新，程序退出
 		os.Exit(1)
@@ -127,7 +167,7 @@ func (m *MspkeyPro) Init(cfg Config) error {
 
 		//打开游览器更新页面
 		if info.Address != "" {
-			openBrowser(info.Address)
+			_ = msp.OpenBrowser(info.Address)
 		}
 		// 强制更新，程序退出
 		os.Exit(1)
@@ -171,18 +211,33 @@ func (m *MspkeyPro) doPost(path string, body any) (*apiResp, error) {
 		return nil, fmt.Errorf("序列化请求失败: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", m.buildURL(path), bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if m.SessionId != "" {
-		req.Header.Set("X-Session-Id", m.SessionId)
-	}
+	const maxAttempts = 3
+	var resp *http.Response
+	var lastErr error
 
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("请求失败: %w", err)
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		req, err := http.NewRequest("POST", m.buildURL(path), bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("创建请求失败: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if m.SessionId != "" {
+			req.Header.Set("X-Session-Id", m.SessionId)
+		}
+
+		resp, err = m.httpClient.Do(req)
+		if err == nil {
+			lastErr = nil
+			break
+		}
+		lastErr = err
+		log.Printf("[MspkeyPro] 请求失败(第%d次/%d): %v\n", attempt, maxAttempts, err)
+		if attempt < maxAttempts {
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		}
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("请求失败(已重试%d次): %w", maxAttempts, lastErr)
 	}
 	defer resp.Body.Close()
 
@@ -199,9 +254,9 @@ func (m *MspkeyPro) doPost(path string, body any) (*apiResp, error) {
 	// 服务端强制下线 / 心跳过期 / 账户过期
 	if ar.Code == OffOnlineCode {
 		// 先尝试本地 Logout 清理
-		_ = m.logoutNow()
+		m.Logout()
 		// 输出消息后程序退出
-		fmt.Fprintf(os.Stderr, "[MspkeyPro] 被服务端强制下线: %s\n", ar.Msg)
+		log.Printf("[MspkeyPro] 被服务端强制下线: %s\n", ar.Msg)
 		os.Exit(1)
 	}
 
@@ -209,13 +264,6 @@ func (m *MspkeyPro) doPost(path string, body any) (*apiResp, error) {
 		return &ar, errors.New(ar.Msg)
 	}
 	return &ar, nil
-}
-
-// randomNonce 生成随机 16 位 hex 字符串作为 Nonce
-func randomNonce() string {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
 }
 
 // signPayload 用客户端内置私钥对拼接后的字符串做 ECDSA 签名
@@ -340,7 +388,7 @@ func (m *MspkeyPro) decryptLoginResp(encryptString, rc4Key string) (*loginData, 
 
 // Login 账号密码登录
 func (m *MspkeyPro) Login(name, pwd string) error {
-	nonce := randomNonce()
+	nonce := msp.GetRandomString(16)
 	payload := strings.Join([]string{m.DeviceID, m.ExeID, name, pwd, nonce}, "|")
 	sigB64, err := m.signPayload(payload)
 	if err != nil {
@@ -389,7 +437,7 @@ func (m *MspkeyPro) Login(name, pwd string) error {
 
 // CarLogin 卡密登录
 func (m *MspkeyPro) CarLogin(serial string) error {
-	nonce := randomNonce()
+	nonce := msp.GetRandomString(16)
 	payload := strings.Join([]string{m.DeviceID, m.ExeID, serial, nonce}, "|")
 	sigB64, err := m.signPayload(payload)
 	if err != nil {
@@ -444,7 +492,7 @@ type QuickLoginResp struct {
 // CreateWebLogin 创建网页登录票据，返回网页登录链接
 func (m *MspkeyPro) CreateWebLogin(api, redirectURL, nonce string) (string, error) {
 	if nonce == "" {
-		nonce = randomNonce()
+		nonce = msp.GetRandomString(16)
 	}
 	ar, err := m.doPost("CreateWebLogin", map[string]string{
 		"ExeID":    m.ExeID,
@@ -500,7 +548,7 @@ func (m *MspkeyPro) ScanQrcode() error {
 	timeout := 3 * time.Minute
 
 	// 1. 生成 nonce，拿到登录链接
-	nonce := randomNonce()
+	nonce := msp.GetRandomString(16)
 	link, err := m.CreateWebLogin(m.ServerURL, m.ServerURL, nonce)
 	if err != nil {
 		return fmt.Errorf("创建网页登录失败: %w", err)
@@ -508,7 +556,7 @@ func (m *MspkeyPro) ScanQrcode() error {
 	fmt.Printf("[ScanQrcode] 登录地址: %s\n", link)
 
 	// 2. 浏览器打开
-	if err := openBrowser(link); err != nil {
+	if err := msp.OpenBrowser(link); err != nil {
 		fmt.Printf("[ScanQrcode] 自动打开浏览器失败，请手动访问: %s  (%v)\n", link, err)
 	}
 
@@ -533,59 +581,17 @@ func (m *MspkeyPro) ScanQrcode() error {
 	return errors.New("扫码登录超时")
 }
 
-// openBrowser 跨平台用默认浏览器打开 URL
-func openBrowser(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	case "darwin":
-		cmd = exec.Command("open", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	return cmd.Start()
-}
-
 // Logout 退出登录（通知服务端 + 清理本地登录态）
-func (m *MspkeyPro) Logout() error {
+func (m *MspkeyPro) Logout() {
 	if m.SessionId == "" {
-		return nil
+		return
 	}
-	_, err := m.doPost("Logout", map[string]string{"SessionId": m.SessionId})
-	// 无论服务端返回什么都清理本地态
-	m.logoutNow()
-	return err
-}
-
-// logoutNow 仅清理本地登录态（不通知服务端，用于强制下线/退出时）
-func (m *MspkeyPro) logoutNow() error {
-	m.stopHeart()
-	m.SessionId = ""
-	m.SessionKey = ""
-	m.UserID = ""
-	return nil
-}
-
-// AutoLogoutOnExit 注册信号处理，程序正常退出/收到 Ctrl+C 时自动 Logout
-// 建议在 Init 成功后立即调用一次：
-//
-//	ms.AutoLogoutOnExit()
-func (m *MspkeyPro) AutoLogoutOnExit() {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-ch
-		if m.SessionId != "" {
-			_ = m.Logout()
-		}
-		os.Exit(0)
-	}()
+	_, _ = m.doPost("Logout", map[string]string{"SessionId": m.SessionId})
 }
 
 // ForceLogout 强制登出（用账号密码清理所有在线记录）
 func (m *MspkeyPro) ForceLogout(name, pwd string) error {
-	nonce := randomNonce()
+	nonce := msp.GetRandomString(16)
 	payload := strings.Join([]string{m.ExeID, name, pwd, nonce}, "|")
 	sigB64, err := m.signPayload(payload)
 	if err != nil {
@@ -1018,14 +1024,14 @@ func (m *MspkeyPro) GetUserInfo() (*UserInfo, error) {
 }
 
 // AddBlack 添加设备黑名单（服务端添加成功后会返回 409 强制下线）
-func (m *MspkeyPro) AddBlack(bak string) error {
-	_, err := m.doPost("AddBlack", map[string]string{
+func (m *MspkeyPro) AddBlack(bak string) {
+	_, _ = m.doPost("AddBlack", map[string]string{
 		"Bak":      bak,
 		"ExeID":    m.ExeID,
 		"DeviceID": m.DeviceID,
 		"UserID":   m.UserID,
 	})
-	return err
+
 }
 
 // Detection 环境检测上报
@@ -1041,7 +1047,7 @@ func (m *MspkeyPro) Detection(token string) error {
 		CRCOld   string `json:"CRCOld"`   //CRC旧的
 		CRCNew   string `json:"CRCNew"`   //CRC新的
 	}
-	var p UserConfig = UserConfig{
+	var p = UserConfig{
 		ExeID:    m.ExeID,
 		DeviceID: m.DeviceID,
 		Version:  m.Version,
@@ -1106,13 +1112,13 @@ func (m *MspkeyPro) startHeart() {
 				if time.Since(lastOK) > heartTimeout {
 					// 允许离线 → 停心跳，程序继续跑（不强制退出）
 					if m.ExeInfo != nil && m.ExeInfo.IsSafeQuit {
-						fmt.Fprintf(os.Stderr, "[heart] 心跳超时：%v 无成功响应，IsSafeQuit=true 允许离线，停止心跳\n", time.Since(lastOK))
+						log.Printf("[heart] 心跳超时：%v 无成功响应，IsSafeQuit=true 允许离线，停止心跳\n", time.Since(lastOK))
 						m.stopHeart()
 						return
 					}
 					// 不允许离线 → 退出
-					fmt.Fprintf(os.Stderr, "[heart] 心跳超时：%v 无成功响应，IsSafeQuit=false 强制退出\n", time.Since(lastOK))
-					m.logoutNow()
+					log.Printf("[heart] 心跳超时：%v 无成功响应，IsSafeQuit=false 强制退出\n", time.Since(lastOK))
+					m.Logout()
 					os.Exit(1)
 				}
 				if _, err := m.Ping(); err == nil {

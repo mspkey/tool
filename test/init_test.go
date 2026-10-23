@@ -14,7 +14,7 @@ func Start() {
 		ExeID:    "65bc7fe8defb0198aac98e3e",
 		Version:  "1.0.0",
 		DevID:    DevID,
-		AdminKey: "646e0cdba20867821d3cc050",
+		AdminID: "646e0cdba20867821d3cc050",
 	}
 	ms := sdk.MspkeyPro{}
 	err := ms.Init(cfg)
