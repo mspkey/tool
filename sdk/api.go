@@ -255,6 +255,8 @@ func (m *MspkeyPro) doPost(path string, body any) (*apiResp, error) {
 	if ar.Code == OffOnlineCode {
 		// 先尝试本地 Logout 清理
 		m.Logout()
+		m.SessionKey=""
+		m.SessionId=""		
 		// 输出消息后程序退出
 		log.Printf("[MspkeyPro] 被服务端强制下线: %s\n", ar.Msg)
 		os.Exit(1)
@@ -1035,8 +1037,7 @@ func (m *MspkeyPro) AddBlack(bak string) {
 }
 
 // Detection 环境检测上报
-func (m *MspkeyPro) Detection(token string) error {
-
+func (m *MspkeyPro) Detection() error {
 	//环境云检测
 	type UserConfig struct {
 		ExeID    string `json:"ExeID"`    //软件ID
@@ -1057,7 +1058,7 @@ func (m *MspkeyPro) Detection(token string) error {
 		CRCNew:   msp.GetExeMD5(),
 	}
 	pJson, _ := json.Marshal(p)
-	token = (&msp.Encrypt{}).Rc4EncryptString(m.UserID, string(pJson))
+	token := (&msp.Encrypt{}).Rc4EncryptString(m.UserID, string(pJson))
 
 	if err := m.requireLogin(); err != nil {
 		return err
