@@ -360,8 +360,7 @@ func (c *Encrypt) ECDSAVerify(pubHex string, sigB64 string, data []byte) error {
 	if err != nil {
 		return errors.New("签名base64解码失败")
 	}
-	if len(sigBytes) != 64 {
-		fmt.Printf("签名长度不是64字节，len=%d\n", len(sigBytes))
+	if len(sigBytes) != 64 {	
 		return errors.New("签名长度不是64字节")
 	}
 	r := new(big.Int).SetBytes(sigBytes[:32])
