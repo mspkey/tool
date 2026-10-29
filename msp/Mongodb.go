@@ -177,6 +177,30 @@ func (c *MongoDB) FindOne(collection string, find interface{}, Data interface{})
 	return nil
 }
 
+//FindOneAndUpdate 更新单条数据 不需要$set
+func (c *MongoDB) FindOneAndUpdate(collection string, find interface{}, update interface{}) error {
+
+	res := c.Client.Database(c.database).Collection(collection).FindOneAndUpdate(c.Ctx, find, bson.M{
+		"$set": update,
+	})
+	if res.Err() != nil {
+		return errors.New("数据更新失败")
+	}
+	return nil
+}
+
+//FindOneAndUpdatePot 更新单条数据 需要$set
+func (c *MongoDB) FindOneAndUpdatePot(collection string, find interface{}, update interface{}) error {
+
+	res := c.Client.Database(c.database).Collection(collection).FindOneAndUpdate(c.Ctx, find, update)
+	if res.Err() != nil {
+		return errors.New("数据更新失败")
+	}
+	return nil
+}
+
+
+
 // FindMany 查询多个信息
 func (c *MongoDB) FindMany(collection string, find interface{}, limit, skip int64, Data interface{}) error {
 
