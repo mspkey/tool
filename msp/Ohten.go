@@ -1,8 +1,11 @@
 package msp
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -11,24 +14,6 @@ import (
 	"time"
 )
 
-func OpenBrowser(url string) error {
-	var cmd string
-	var args []string
-
-	switch runtime.GOOS {
-	case "windows":
-		cmd = "cmd"
-		args = []string{"/c", "start", url}
-	case "darwin":
-		cmd = "open"
-		args = []string{url}
-	default: // "linux", "freebsd", "openbsd", "netbsd"
-		cmd = "xdg-open"
-		args = []string{url}
-	}
-
-	return exec.Command(cmd, args...).Start()
-}
 
 // IsEmail 判断是否是邮箱格式 测试成功
 func IsEmail(email string) bool {
@@ -92,10 +77,42 @@ func CompareVersions(LocalVersion, RemoteVersion string) bool {
 	return true
 }
 
-
 // RandomInt 取一个随机数
 func RandomInt(min, max int) int {
 	// 创建新的随机数生成器，使用当前时间作为种子
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	return min + r.Intn(max-min+1)
+}
+
+// GetExeMD5 获取软件自身MD5
+func GetExeMD5() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	f, err := os.Open(exePath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+
+// OpenBrowser 跨平台用默认浏览器打开 URL
+func OpenBrowser(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	return cmd.Start()
 }

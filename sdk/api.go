@@ -1,868 +1,1139 @@
 package sdk
 
 import (
-	"crypto/rc4"
-	"encoding/base64"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
 
-	"github.com/gorilla/websocket"
-	"github.com/mspkey/tool/bin"
 	"github.com/mspkey/tool/msp"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// rc4EncryptString 用rc4进行加密 返回base64 格式数据
-func rc4EncryptString(key, strData string) string {
-	cipher, err := rc4.NewCipher([]byte(key))
-	if err != nil {
-		return ""
-	}
-	data := make([]byte, len(strData))
-	cipher.XORKeyStream(data, []byte(strData))
-	encoded := base64.StdEncoding.EncodeToString(data)
-	return encoded
+// ========================== 客户端核心 ==========================
+
+// jwtKeyInternal 与服务端 db.JwtKey 一致，登录请求外层 RC4 固定密钥
+const jwtKeyInternal = "MspKeyPro"
+
+const LockHost = "127.0.0.1:8820"
+
+const (
+	// ClientPrivateKey 客户端 ECDSA 私钥 hex，用于对登录请求签名
+	ClientPrivateKey = "4543533220000000109E1D054FBA51D4BCAA604F7744FF74F60C5967AAA0C45B5E27C65E6688A7F76DD35185EC3424E56910057EF8F8F95C66BB3233FE481B339E8671E14C6A5AE885EFA923812601F86F04D0BC1F452E19B0B36074959429EB9706210D80FEBA77"
+
+	// ServerPublicKey 服务端 ECDSA 公钥 hex，用于验签服务端下发数据
+	ServerPublicKey = "4543533120000000E91A523F50E7296C4AF23489E596346E5F7884162DA4AE95BDA6E0C8AB919BC2D8310F4AF574768C80924208D98BEB35914E992406AB7D73210DDB214E5BB465"
+)
+
+type Config struct {
+	IP      string // 服务器IP，如 127.0.0.1:8810
+	ExeID   string // 软件ID
+	Version string // 当前版本
+	DevID   string // 设备ID
+	AdminID string // 管理员 ID (ObjectID hex)，服务端用它 RC4 加密登录/ExeInfo 响应
 }
 
-// rc4DecodeString 用rc4进行解密
-func rc4DecodeString(key string, Base64Data string) ([]byte, error) {
-	decodeText, err := base64.StdEncoding.DecodeString(Base64Data)
-	if err != nil {
-		return nil, errors.New("base64 解码失败")
+// UserInfo 用户
+type UserInfo struct {
+	ID            bson.ObjectID `json:"ID" bson:"_id"`                      //用户ID
+	AdminID       bson.ObjectID `json:"AdminID" bson:"AdminID"`             //管理员ID
+	AgentID       bson.ObjectID `json:"AgentID" bson:"AgentID"`             //代理ID
+	DeviceID      string        `json:"DeviceID" bson:"DeviceID"`           //设备ID
+	DkCount       int64         `json:"DkCount" bson:"DkCount"`             //多开数量设定0=无限多开 默认为3 最大为100
+	ExeID         bson.ObjectID `json:"ExeID" bson:"ExeID"`                 //绑定的软件
+	Name          string        `json:"Name" bson:"Name"`                   //用户名
+	Pwd           string        `json:"Pwd" bson:"Pwd"`                     //密码
+	Level         int64         `json:"Level" bson:"Level"`                 //用户等级 0=小时卡 1=天卡 2=周卡 3=月卡 4=季卡 5=半年卡 6=年卡 7=永久卡
+	Serial        string        `json:"Serial" bson:"Serial"`               //最后一次充值的卡号
+	State         bool          `json:"State" bson:"State"`                 //状态
+	Online        bool          `json:"Online" bson:"Online"`               //在线状态
+	RegIP         string        `json:"RegIP" bson:"RegIP"`                 //注册ip
+	RegTime       time.Time     `json:"RegTime" bson:"RegTime"`             //注册时间
+	EndTime       time.Time     `json:"EndTime" bson:"EndTime"`             //到期时间
+	LoginIP       string        `json:"LoginIP" bson:"LoginIP"`             //登录ip
+	LastLoginIP   string        `json:"LastLoginIP" bson:"LastLoginIP"`     //上一次登录ip
+	LoginTime     time.Time     `json:"LoginTime" bson:"LoginTime"`         //登录时间
+	LastLoginTime time.Time     `json:"LastLoginTime" bson:"LastLoginTime"` //上一次登录时间
+	Bak           string        `json:"Bak" bson:"Bak"`                     //备注
+	BindCont      int64         `json:"BindCont" bson:"BindCont"`           //当前用户换绑次数
+	BindTime      time.Time     `json:"BindTime" bson:"BindTime"`           //换绑的时间
+	Conf          string        `json:"Conf" bson:"Conf"`                   //用户配置信息
+}
+
+// MspkeyPro SDK 客户端，初始化后调用各业务接口
+type MspkeyPro struct {
+	// 配置项
+	ServerURL    string // 服务器基地址，如 http://127.0.0.1:8810
+	ExeID        string // 软件 ID (ObjectID hex)
+	DeviceID     string // 设备 ID
+	AdminID      string // 管理员 ID (ObjectID hex)，服务端用它 RC4 加密登录/ExeInfo 响应
+	ServerPubKey string // 服务端 ECDSA 公钥 hex，验签下发数据用
+	Version      string // 客户端版本号，可选
+	ExeMD5       string // 软件 MD5，可选
+
+	// 登录态，成功登录后填充
+	SessionId  string
+	SessionKey string
+	UserID     string
+
+	// 软件信息（Init 后自动缓存）
+	ExeInfo *GetExeInfoResp
+
+	// 心跳
+	heartInterval time.Duration
+	heartStop     chan struct{}
+
+	httpClient *http.Client
+	encrypt    *msp.Encrypt
+}
+
+// Init 初始化 SDK 客户端，传入 Config 配置
+//
+// 用法:
+//
+//	DevID := sdk.GetDevID()
+//	ms := sdk.MspkeyPro{}
+//	err := ms.Init(sdk.Config{
+//	    IP:           sdk.LockHost,
+//	    ExeID:        "65bc7fe8defb0198aac98e3e",
+//	    Version:      "1.0.0",
+//	    DevID:        DevID,
+//	    AdminID:      "...", // Admin ObjectID hex
+//	})
+func (m *MspkeyPro) Init(cfg Config) error {
+	if cfg.ExeID == "" {
+		return errors.New("Init: ExeID 不能为空")
 	}
-	cipher, err := rc4.NewCipher([]byte(key))
+	if cfg.DevID == "" {
+		cfg.DevID = GetDevID()
+	}
+	if cfg.IP == "" {
+		return errors.New("Init: IP 不能为空")
+	}
+
+	// 负载均衡 / 服务器可用性检测
+	ip, err := loadBalancing(cfg.IP)
+	if err != nil {
+		return fmt.Errorf("Init: %w", err)
+	}
+
+	// 拼 ServerURL，默认 http，含 :443 时走 https
+	scheme := "http"
+	if strings.Contains(ip, ":443") {
+		scheme = "https"
+	}
+	m.ServerURL = scheme + "://" + strings.TrimRight(ip, "/")
+	m.ExeID = cfg.ExeID
+	m.DeviceID = cfg.DevID
+	m.AdminID = cfg.AdminID
+
+	m.ServerPubKey = ServerPublicKey
+
+	m.Version = cfg.Version
+	m.ExeMD5 = msp.GetExeMD5()
+	m.httpClient = &http.Client{Timeout: 30 * time.Second}
+	m.encrypt = &msp.Encrypt{}
+
+	// 自动获取软件信息（缓存 + 填充 AdminKey / 心跳间隔）
+	info, err := m.GetExeInfo()
+	if err != nil {
+		return fmt.Errorf(`init: 获取软件信息失败: %w`, err)
+	}
+	m.ExeInfo = info
+
+	//判断软件版本号是否需要强制更新
+	if m.Version != info.Versions && info.IsUpDate {
+		fmt.Printf("软件版本不一致，软件需要更新，当前版本：%s，最新版本：%s\n", m.Version, info.Versions)
+
+		//打开游览器更新页面
+		if info.Address != "" {
+			_ = msp.OpenBrowser(info.Address)
+		}
+		// 强制更新，程序退出
+		os.Exit(1)
+		m.AddBlack("绕过退出函数")
+		return fmt.Errorf("软件版本不一致，软件需要更新")
+	}
+
+	//判断软件MD5是否一致
+	if m.ExeMD5 != info.Md5 && info.IsUpDate {
+		fmt.Printf("软件资源不一致，软件需要更新\n")
+
+		//打开游览器更新页面
+		if info.Address != "" {
+			_ = msp.OpenBrowser(info.Address)
+		}
+		// 强制更新，程序退出
+		os.Exit(1)
+		m.AddBlack("绕过退出函数")
+		return fmt.Errorf("软件资源不一致，需要强制更新")
+	}
+
+	// 心跳间隔：HatInterval 是分，默认 30 秒
+	if info.HatInterval > 0 {
+		m.heartInterval = time.Duration(info.HatInterval) * time.Minute
+	} else {
+		m.heartInterval = 30 * time.Second
+	}
+
+	return nil
+}
+
+// ========================== 基础请求工具 ==========================
+
+// apiResp 服务端统一返回结构
+type apiResp struct {
+	Code int             `json:"Code"`
+	Msg  string          `json:"Msg"`
+	Data json.RawMessage `json:"Data"`
+	Time int64           `json:"Time"`
+}
+
+// buildURL 构造完整 API 地址
+func (m *MspkeyPro) buildURL(path string) string {
+	return m.ServerURL + "/api/v1/user/" + path
+}
+
+// OffOnlineCode 服务端强制下线状态码
+const OffOnlineCode = 409
+
+// doPost 通用 POST JSON 请求，自动附加鉴权 header（如已登录）
+// 遇到 409（强制下线/心跳过期/账户过期）时自动 Logout 并 os.Exit(1)
+func (m *MspkeyPro) doPost(path string, body any) (*apiResp, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求失败: %w", err)
+	}
+
+	const maxAttempts = 3
+	var resp *http.Response
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		req, err := http.NewRequest("POST", m.buildURL(path), bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("创建请求失败: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if m.SessionId != "" {
+			req.Header.Set("X-Session-Id", m.SessionId)
+		}
+
+		resp, err = m.httpClient.Do(req)
+		if err == nil {
+			lastErr = nil
+			break
+		}
+		lastErr = err
+		log.Printf("[MspkeyPro] 请求失败(第%d次/%d): %v\n", attempt, maxAttempts, err)
+		if attempt < maxAttempts {
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		}
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("请求失败(已重试%d次): %w", maxAttempts, lastErr)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %w", err)
+	}
+
+	var ar apiResp
+	if err := json.Unmarshal(raw, &ar); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %w, body=%s", err, string(raw))
+	}
+
+	// 服务端强制下线 / 心跳过期 / 账户过期
+	if ar.Code == OffOnlineCode {
+		// 先尝试本地 Logout 清理
+		m.Logout()
+		m.SessionKey=""
+		m.SessionId=""		
+		// 输出消息后程序退出
+		log.Printf("[MspkeyPro] 被服务端强制下线: %s\n", ar.Msg)
+		os.Exit(1)
+	}
+
+	if ar.Code != 200 {
+		return &ar, errors.New(ar.Msg)
+	}
+	return &ar, nil
+}
+
+// signPayload 用客户端内置私钥对拼接后的字符串做 ECDSA 签名
+func (m *MspkeyPro) signPayload(payload string) (string, error) {
+	return m.encrypt.ECDSASign(ClientPrivateKey, []byte(payload))
+}
+
+// verifySig 用服务端公钥验签
+func (m *MspkeyPro) verifySig(sigB64 string, data []byte) error {
+	return m.encrypt.ECDSAVerify(m.ServerPubKey, sigB64, data)
+}
+
+// encryptLoginReq 加密登录类请求：先拼 JSON，再 RC4(jwtKeyInternal)
+func (m *MspkeyPro) encryptLoginReq(req any) (string, error) {
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return "", err
+	}
+	return m.encrypt.Rc4EncryptString(jwtKeyInternal, string(raw)), nil
+}
+
+// ========================== 1. 无需登录的公共接口 ==========================
+
+// GetExeInfoResp GetExeInfo 解密后的返回结构
+type GetExeInfoResp struct {
+	ExeID       bson.ObjectID `json:"ID"`
+	Title       string        `json:"Title"`
+	Versions    string        `json:"Versions"`
+	Notice      string        `json:"Notice"`
+	Address     string        `json:"Address"`
+	Md5         string        `json:"Md5"`
+	IsWebLogin  bool          `json:"IsWebLogin"`
+	IsSafeQuit  bool          `json:"IsSafeQuit"`
+	IsDK        bool          `json:"IsDK"`
+	IsDbg       bool          `json:"IsDbg"`
+	IsUpDate    bool          `json:"IsUpDate"`
+	SubTime     int64         `json:"SubTime"`
+	LoginMod    int64         `json:"LoginMod"`
+	AdminID     bson.ObjectID `json:"AdminID"`
+	PayLink     string        `json:"PayLink"`
+	HatInterval int64         `json:"HatInterval"`
+}
+
+// GetExeInfo 获取软件信息（RC4(AdminKey) 解密 + ECDSA 验签）
+func (m *MspkeyPro) GetExeInfo() (*GetExeInfoResp, error) {
+	ar, err := m.doPost("GetExeInfo", map[string]string{"ExeID": m.ExeID})
 	if err != nil {
 		return nil, err
 	}
-	output := make([]byte, len(decodeText))
-	cipher.XORKeyStream(output, decodeText)
-	return output, nil
-}
 
-type MspKey struct {
-	url        string //连接URL
-	conn       *websocket.Conn
-	isCoon     bool         //服务器是否连接成功
-	res        chan resJson //返回的源数据
-	Info       UserInfo     //用户自身信息
-	Exe        ExeInfo      //用户绑定的软件
-	devKey     string       //通讯密钥
-	IsDug      bool         //是否调试信息输出
-	config     Config       //客户配置
-	isReset    bool         //断线重连标志 true 时表示断线重连过了 只针对登录的有效
-	isAdmin    bool         //是否群主服务器
-	writeLock  sync.Mutex   //写入锁
-	quitHart   chan bool    //退出心跳包
-	AuthData   AuthData     //登录数据
-	timeOffSet int64        //时间偏移  服务器时间-本地时间
-	HatCount   int64        //心跳计数
-}
-
-func (c *MspKey) IsLogin() bool {
-	return c.AuthData.IsLogin
-}
-
-// GetData 服务器消息返回事件
-func (c *MspKey) onMessage() {
-	Haunt := 0
-	for {
-		_, msg, err := c.conn.ReadMessage()
-		if err != nil {
-			c.isCoon = false
-			log.Println("服务器断开连接")
-			//进行断线重连
-			if c.isReset && c.AuthData.IsLogin {
-				log.Println("断线重连中....")
-				go c.RestConn()
-			} else {
-				log.Fatalln("尚未登录,程序结束")
-			}
-			c.quitHart <- true
-			return
-		}
-		res := strings.ReplaceAll(string(msg), "\"", "")
-		msg, err = rc4DecodeString(c.devKey, res)
-		if err != nil {
-			continue
-		}
-		if c.IsDug {
-			log.Printf("接受数据:<- %s", msg)
-		}
-
-		var data resJson
-
-		err = json.Unmarshal(msg, &data)
-		if err != nil {
-			log.Println("Error:", err)
-			continue
-		}
-
-		//防止攻击回放 用于时间戳判断
-		p, _ := strconv.ParseInt(data.Time, 10, 64)
-		if p <= time.Now().Unix() {
-			log.Fatalln("校验失败,数据已过期")
-			return
-		}
-
-		//动态密钥替换操作
-		if data.Tag == tagDevKey {
-			c.devKey = fmt.Sprintf("%s", data.Data)
-			sec, _ := strconv.ParseInt(data.Time, 10, 64)
-			c.timeOffSet = sec - time.Now().Unix()
-			continue
-		}
-
-		//实时消息
-		if data.Tag == "SendMsg" && data.Code == 1 {
-			log.Println("收到一条实时消息:" + data.Msg)
-			continue
-		}
-
-		//主动下线
-		if data.Tag == "OffLine" && data.Code == 1 {
-			log.Fatalln(data.Msg)
-			return
-		}
-
-
-		if data.Tag == tagPing {
-			Haunt++
-			if c.IsDug {
-				log.Printf("收到心跳包,心跳次数:%d\n", Haunt)
-				log.Printf("心跳包数据：%s\n", data.Msg)
-			}
-		}
-
-		//其他 自己进行解析
-		if data.Tag != "Null" {
-			c.res <- data
-		}
-
+	var box struct {
+		EncryptString string `json:"encryptString"`
+	}
+	if err := json.Unmarshal(ar.Data, &box); err != nil {
+		return nil, err
 	}
 
-}
+	if m.AdminID == "" {
+		return nil, errors.New("尚未配置 AdminKey")
+	}
 
-// sendData 发送数据
-func (c *MspKey) sendData(send sendJson) (resJson, error) {
-	c.writeLock.Lock()
-	defer c.writeLock.Unlock()
-	send.Time = fmt.Sprintf("%d", time.Now().Unix())
-	marshal, err := json.Marshal(send)
+	plain, err := m.encrypt.Rc4DecodeString(m.AdminID, box.EncryptString)
 	if err != nil {
-		return resJson{}, err
-	}
-	if c.IsDug {
-		log.Println("发送数据:->" + string(marshal))
+		return nil, fmt.Errorf("RC4 解密失败: %w", err)
 	}
 
-	msg := rc4EncryptString(c.devKey, string(marshal))
-	err = c.conn.WriteMessage(1, []byte(msg))
-	if err != nil {
-		return resJson{}, err
+	// 用 json.RawMessage 接 ExeInfo，拿到服务端原始 JSON bytes 用于验签
+	var inner struct {
+		ExeInfo json.RawMessage `json:"ExeInfo"`
+		SigB64  string          `json:"SigB64"`
 	}
-	//这边需要等待的返回以免数据错乱
-	count := 0
-	for {
-		time.Sleep(time.Millisecond * 300)
+	if err := json.Unmarshal(plain, &inner); err != nil {
+		return nil, err
+	}
+
+	if err := m.verifySig(inner.SigB64, inner.ExeInfo); err != nil {
+		return nil, fmt.Errorf("ECDSA 验签失败: %w", err)
+	}
+
+	var info GetExeInfoResp
+	if err := json.Unmarshal(inner.ExeInfo, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+// ========================== 登录相关 ==========================
+
+// loginData 登录成功后解密得到
+type loginData struct {
+	SessionId  string `json:"SessionId"`
+	SessionKey string `json:"SessionKey"`
+	UserID     string `json:"UserID"`
+	Nonce      string `json:"Nonce"`
+}
+
+// decryptLoginResp 解密并验签登录接口返回的 encryptString
+// rc4Key 为服务端 AdminID.Hex()
+func (m *MspkeyPro) decryptLoginResp(encryptString, rc4Key string) (*loginData, error) {
+	plain, err := m.encrypt.Rc4DecodeString(rc4Key, encryptString)
+	if err != nil {
+		return nil, fmt.Errorf("RC4 解密失败: %w", err)
+	}
+
+	var inner struct {
+		LoginData json.RawMessage `json:"LoginData"`
+		SigB64    string          `json:"SigB64"`
+	}
+	if err := json.Unmarshal(plain, &inner); err != nil {
+		return nil, err
+	}
+
+	if err := m.verifySig(inner.SigB64, inner.LoginData); err != nil {
+		return nil, fmt.Errorf("登录响应验签失败: %w", err)
+	}
+	var ld loginData
+	if err := json.Unmarshal(inner.LoginData, &ld); err != nil {
+		return nil, err
+	}
+	return &ld, nil
+}
+
+// Login 账号密码登录
+func (m *MspkeyPro) Login(name, pwd string) error {
+	nonce := msp.GetRandomString(16)
+	payload := strings.Join([]string{m.DeviceID, m.ExeID, name, pwd, nonce}, "|")
+	sigB64, err := m.signPayload(payload)
+	if err != nil {
+		return err
+	}
+
+	inner := map[string]string{
+		"DeviceID": m.DeviceID,
+		"ExeID":    m.ExeID,
+		"Name":     name,
+		"Pwd":      pwd,
+		"Nonce":    nonce,
+		"SigB64":   sigB64,
+	}
+	encStr, err := m.encryptLoginReq(inner)
+	if err != nil {
+		return err
+	}
+
+	ar, err := m.doPost("Login", map[string]string{"EncryptString": encStr})
+	if err != nil {
+		return err
+	}
+
+	var box struct {
+		EncryptString string `json:"encryptString"`
+	}
+	if err := json.Unmarshal(ar.Data, &box); err != nil {
+		return err
+	}
+
+	if m.AdminID == "" {
+		return errors.New("未配置 AdminID，无法解密登录响应")
+	}
+	ld, err := m.decryptLoginResp(box.EncryptString, m.AdminID)
+	if err != nil {
+		return err
+	}
+
+	m.SessionId = ld.SessionId
+	m.SessionKey = ld.SessionKey
+	m.UserID = ld.UserID
+	m.startHeart()
+	return nil
+}
+
+// CarLogin 卡密登录
+func (m *MspkeyPro) CarLogin(serial string) error {
+	nonce := msp.GetRandomString(16)
+	payload := strings.Join([]string{m.DeviceID, m.ExeID, serial, nonce}, "|")
+	sigB64, err := m.signPayload(payload)
+	if err != nil {
+		return err
+	}
+
+	inner := map[string]string{
+		"DeviceID": m.DeviceID,
+		"ExeID":    m.ExeID,
+		"Serial":   serial,
+		"Nonce":    nonce,
+		"SigB64":   sigB64,
+	}
+	encStr, err := m.encryptLoginReq(inner)
+	if err != nil {
+		return err
+	}
+
+	ar, err := m.doPost("CarLogin", map[string]string{"EncryptString": encStr})
+	if err != nil {
+		return err
+	}
+
+	var box struct {
+		EncryptString string `json:"encryptString"`
+	}
+	if err := json.Unmarshal(ar.Data, &box); err != nil {
+		return err
+	}
+
+	if m.AdminID == "" {
+		return errors.New("未配置 AdminID，无法解密登录响应")
+	}
+	ld, err := m.decryptLoginResp(box.EncryptString, m.AdminID)
+	if err != nil {
+		return err
+	}
+
+	m.SessionId = ld.SessionId
+	m.SessionKey = ld.SessionKey
+	m.UserID = ld.UserID
+	m.startHeart()
+	return nil
+}
+
+// QuickLoginResp 快速登录返回
+type QuickLoginResp struct {
+	Link  string `json:"Link"`
+	Nonce string `json:"Nonce"`
+}
+
+// CreateWebLogin 创建网页登录票据，返回网页登录链接
+func (m *MspkeyPro) CreateWebLogin(api, redirectURL, nonce string) (string, error) {
+	if nonce == "" {
+		nonce = msp.GetRandomString(16)
+	}
+	ar, err := m.doPost("CreateWebLogin", map[string]string{
+		"ExeID":    m.ExeID,
+		"DeviceID": m.DeviceID,
+		"Api":      api,
+		"Url":      redirectURL,
+		"Nonce":    nonce,
+	})
+	if err != nil {
+		return "", err
+	}
+	var r struct {
+		Link string `json:"Link"`
+	}
+	if err := json.Unmarshal(ar.Data, &r); err != nil {
+		return "", err
+	}
+	return r.Link, nil
+}
+
+// QuickLogin 轮询网页登录状态，登录成功后填充 SessionId
+func (m *MspkeyPro) QuickLogin(nonce string) error {
+	ar, err := m.doPost("QuickLogin", map[string]string{"Nonce": nonce})
+	if err != nil {
+		return err
+	}
+
+	var box struct {
+		EncryptString string `json:"encryptString"`
+	}
+	if err := json.Unmarshal(ar.Data, &box); err != nil {
+		return err
+	}
+
+	if m.AdminID == "" {
+		return errors.New("未配置 AdminID")
+	}
+	ld, err := m.decryptLoginResp(box.EncryptString, m.AdminID)
+	if err != nil {
+		return err
+	}
+	m.SessionId = ld.SessionId
+	m.SessionKey = ld.SessionKey
+	m.UserID = ld.UserID
+	m.startHeart()
+	return nil
+}
+
+// ScanQrcode 网页扫码登录：获取登录地址 → 浏览器打开 → 每 3 秒轮询 QuickLogin 直到成功
+// timeout: 最长等待时间，<=0 则默认 3 分钟
+func (m *MspkeyPro) ScanQrcode() error {
+
+	timeout := 3 * time.Minute
+
+	// 1. 生成 nonce，拿到登录链接
+	nonce := msp.GetRandomString(16)
+	link, err := m.CreateWebLogin(m.ServerURL, m.ServerURL, nonce)
+	if err != nil {
+		return fmt.Errorf("创建网页登录失败: %w", err)
+	}
+	fmt.Printf("[ScanQrcode] 登录地址: %s\n", link)
+
+	// 2. 浏览器打开
+	if err := msp.OpenBrowser(link); err != nil {
+		fmt.Printf("[ScanQrcode] 自动打开浏览器失败，请手动访问: %s  (%v)\n", link, err)
+	}
+
+	// 3. 每 3 秒轮询 QuickLogin
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	fmt.Println("[ScanQrcode] 等待扫码登录中...")
+	for true {
 		select {
-		case temp := <-c.res:
-			if temp.Tag == send.Type {
-				if temp.Code == 0 {
-					return resJson{}, errors.New(temp.Msg)
-				} else {
-					return temp, nil
-				}
+		case <-ticker.C:
+			if time.Now().After(deadline) {
+				return errors.New("扫码登录超时")
 			}
-		case <-time.After(time.Second * 1):
-			if count > 5 {
-				return resJson{}, errors.New("等待超时")
+			if err := m.QuickLogin(nonce); err == nil {
+				fmt.Printf("[ScanQrcode] 登录成功\n")
+				return nil
 			}
-			count++
-		}
-
-	}
-
-}
-
-// connectServer 连接服务器 内部不能包含结束程序指令
-func (c *MspKey) connectServer() error {
-
-	if strings.Contains(c.config.IP, ":443") {
-		c.url = fmt.Sprintf("wss://%s/api/user/ws", c.config.IP)
-	} else {
-		c.url = fmt.Sprintf("ws://%s/api/user/ws", c.config.IP)
-	}
-
-	//兜底清除异常连接
-	if c.devKey != "" {
-		c.reportConnStatus()
-	}
-
-	key := msp.GetRandomString(6)
-	c.devKey = key //默认密钥
-
-	// 创建自定义的 HTTP Header
-	header := http.Header{}
-	header.Set("Key", base64.StdEncoding.EncodeToString([]byte(c.devKey))) // 添加自定义头部
-	str := bson.M{
-		"ExeID": c.config.ExeID,
-		"DevID": c.config.DevID,
-	}
-	marshal, err := json.Marshal(str)
-	if err != nil {
-		return err
-	}
-	header.Set("Data", base64.StdEncoding.EncodeToString(marshal)) // 添加自定义头部
-
-	c.conn, _, err = websocket.DefaultDialer.Dial(c.url, header)
-	if err != nil {
-		return errors.New("服务器连接失败")
-	}
-
-	go c.onMessage()
-	count := 0
-	for {
-		if c.devKey != key {
-			c.isReset = true
-			//启动心跳包
-			go func() {
-				//服务器链接成功
-				c.isCoon = true
-				//先发一次心跳包 用于检测版本等信息
-				c.ping()
-				//启动检测
-				go c.safe()
-				for {
-					select {
-					case <-c.quitHart:
-						if c.IsDug {
-							log.Println("退出心跳包")
-						}
-						return
-					case <-time.After(time.Second * 60):
-						if c.isCoon {
-							c.ping()
-						}
-					}
-
-				}
-			}()
-			return nil
-		}
-		if count > 10 {
-			return errors.New("等待超时")
-		}
-		count++
-		time.Sleep(time.Second)
-	}
-}
-
-// Init 验证初始化
-func (c *MspKey) Init(Config Config) error {
-	c.config = Config
-	//判断是否群主服务器
-	if c.config.IP == LockHost {
-		c.isAdmin = true
-	}
-	//负载均衡
-	balancing, err := loadBalancing(c.config.IP)
-	if err != nil {
-		log.Fatalln(err)
-	} else {
-		c.config.IP = balancing
-	}
-
-	if c.res == nil {
-		c.res = make(chan resJson, 1)
-	}
-	if c.quitHart == nil {
-		c.quitHart = make(chan bool, 1)
-	}
-	err = c.connectServer()
-	if err != nil {
-		return err
-	}
-
-	//获取软件信息,用于之后的各种调用
-	_, _ = c.GetExeInfo()
-
-	//判断软件是否需要更新
-	if c.Exe.IsUpDate {
-
-		if c.Exe.Versions != c.config.Version {
-			//判断更新地址是否可用
-			if c.Exe.Address == "" {
-				log.Fatalln("当前版本不是最新版本，请更新版本")
-			}
-
-			//判断是否直链
-			str := c.Exe.Address[len(c.Exe.Address)-5:]
-			isdown := false
-
-			Name := ""
-			if strings.Contains(str, ".rar") {
-				isdown = true
-				Name = c.Exe.Title + "_" + c.Exe.Versions + ".rar"
-			}
-			if strings.Contains(str, ".zip") {
-				isdown = true
-				Name = c.Exe.Title + "_" + c.Exe.Versions + ".zip"
-			}
-			if strings.Contains(str, ".exe") {
-				isdown = true
-				Name = c.Exe.Title + "_" + c.Exe.Versions + ".exe"
-			}
-			if strings.Contains(str, ".7z") {
-				isdown = true
-				Name = c.Exe.Title + "_" + c.Exe.Versions + ".7z"
-			}
-
-			if !isdown {
-				//使用游览器打开
-				err := msp.OpenBrowser(c.Exe.Address)
-				if err != nil {
-					return err
-				}
-			}
-
-			//需要进行更新
-			ui := &bin.ClientUI{}
-			exePath, err := os.Executable()
-			if err != nil {
-				log.Fatalln(err)
-
-			}
-			// 取出目录（剔除exe文件名）
-			exeDir, err := filepath.EvalSymlinks(exePath) // 处理软链接
-			if err != nil {
-				log.Fatalln(err)
-			}
-			
-			err = ui.RunDownUI(c.Exe.Address, filepath.Dir(exeDir), Name)
-			if err != nil {
-				log.Fatalln(err)
-			}
-			log.Fatalln("当前不是最新版本,正在更新软件中....")
-
-		}
-
-	}
-
-	return nil
-}
-
-// RestConn 断线重连操作
-func (c *MspKey) RestConn() {
-
-	//等待30-60秒
-	t := msp.RandomInt(30, 60)
-	time.Sleep(time.Duration(t))
-	//判断是否群主服务器
-	if c.isAdmin {
-		c.config.IP = LockHost
-	}
-	//负载均衡
-	balancing, err := loadBalancing(c.config.IP)
-	if err != nil {
-		log.Fatalln(err)
-	} else {
-		c.config.IP = balancing
-	}
-
-	count := 3
-	for {
-		log.Printf("第%d次断线重连\n", count+1)
-		time.Sleep(time.Second * time.Duration(count))
-		err = c.connectServer()
-		if err != nil {
-			if count > 360 {
-				if c.Exe.IsSafeQuit {
-					return
-				}
-				log.Fatalln("断线重连失败")
-			}
-			count++
-			continue
-		}
-		log.Println("断线重连成功,自动登录中...")
-		break
-	}
-
-	//需要ck自动登录
-	time.Sleep(time.Second)
-	for {
-		if c.Info.Name != "" {
-			err = c.CkLogin(c.Info.ID.Hex())
-			if err != nil {
-				log.Fatalln(err)
-			} else {
-				log.Println("自动登录成功")
-				break
-			}
-		} else {
-			log.Fatalln("尚未登录")
 		}
 	}
+	return errors.New("扫码登录超时")
 }
 
-// GetExeInfo 获取软件基本信息ok
-func (c *MspKey) GetExeInfo() (ExeInfo, error) {
-
-	var p sendJson
-	p.Type = tagExe
-	data, err := c.sendData(p)
-	if err != nil {
-		return ExeInfo{}, err
-	}
-	//需要解析exe数据  复用到全局上
-	var exe struct {
-		Exe ExeInfo `json:"Exe"`
-	}
-	marshal, err := json.Marshal(data.Data)
-	if err != nil {
-		return ExeInfo{}, err
-	}
-	err = json.Unmarshal(marshal, &exe)
-	if err != nil {
-		return ExeInfo{}, err
-	}
-	c.Exe = exe.Exe
-	return c.Exe, nil
-}
-
-// Register 用户注册ok
-func (c *MspKey) Register(Name, Pwd, Code string) error {
-
-	var p sendJson
-	p.Type = tagRegister
-	p.Data = bson.M{"Name": Name, "Pwd": Pwd, "Code": Code}
-	_, err := c.sendData(p)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// Login 用户登录ok
-func (c *MspKey) Login(Name, Pwd string) error {
-
-	var p sendJson
-	p.Type = tagLogin
-	p.Data = bson.M{"Name": Name, "Pwd": Pwd}
-	res, err := c.sendData(p)
-	if err != nil {
-		return err
-	}
-	return c.AuthDataParse(res.Data)
-}
-
-// CarLogin 卡密登录ok
-func (c *MspKey) CarLogin(Serial string) error {
-
-	var p sendJson
-	p.Type = tagCarLogin
-	p.Data = bson.M{"Serial": Serial}
-	res, err := c.sendData(p)
-	if err != nil {
-		return err
-	}
-	return c.AuthDataParse(res.Data)
-}
-
-// CkLogin ck登录ok
-func (c *MspKey) CkLogin(CK string) error {
-
-	var p sendJson
-	p.Type = tagCkLogin
-	p.Data = bson.M{"CK": CK}
-	res, err := c.sendData(p)
-	if err != nil {
-		return err
-	}
-	return c.AuthDataParse(res.Data)
-}
-
-// UserPay 用户卡密充值ok
-func (c *MspKey) UserPay(Name, Serial string) error {
-
-	var p sendJson
-	p.Type = tagUserPay
-	p.Data = bson.M{"Name": Name, "Serial": Serial}
-	_, err := c.sendData(p)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// UpUserPwd 修改密码ok
-func (c *MspKey) UpUserPwd(Name, OldPwd, NewPwd string) error {
-
-	var p sendJson
-	p.Type = tagUpUserPwd
-	p.Data = bson.M{"Name": Name, "OldPwd": OldPwd, "NewPwd": NewPwd}
-	_, err := c.sendData(p)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// BindDeviceID 换绑ok
-func (c *MspKey) BindDeviceID(Name, Pwd string) error {
-
-	var p sendJson
-	p.Type = tagBindDeviceID
-	p.Data = bson.M{"Name": Name, "Pwd": Pwd}
-	_, err := c.sendData(p)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// AddBlack 加入黑名单ok
-func (c *MspKey) AddBlack(Bak string) error {
-
-	var p sendJson
-	p.Type = tagAddBlack
-	p.Data = bson.M{"Bak": Bak}
-	_, err := c.sendData(p)
-	if err != nil {
-		return err
-	}
-	return nil
-
-}
-
-// GetUserInfo 获取用户信息ok
-func (c *MspKey) GetUserInfo() (UserInfo, error) {
-	if !c.AuthData.IsLogin {
-		return UserInfo{}, errors.New("请先登录>>>")
-	}
-	var p sendJson
-	p.Type = tagUserInfo
-	res, err := c.sendData(p)
-	if err != nil {
-		return UserInfo{}, err
-	}
-
-	var u struct {
-		UserInfo UserInfo `json:"UserInfo"`
-	}
-	marshal, err := json.Marshal(res.Data)
-	if err != nil {
-		return UserInfo{}, err
-	}
-	err = json.Unmarshal(marshal, &u)
-	if err != nil {
-		return UserInfo{}, err
-	}
-	c.Info = u.UserInfo
-	//进行到期时间的更新
-	c.AuthData.EndTime = c.Info.EndTime
-	return c.Info, nil
-}
-
-// SetUerConf 设置用户配置信息 ok
-func (c *MspKey) SetUerConf(Conf string) error {
-
-	if !c.AuthData.IsLogin {
-		return errors.New("请先登录>>>")
-	}
-
-	var p sendJson
-	p.Type = tagSetUerConf
-	p.Data = bson.M{"Conf": Conf}
-	_, err := c.sendData(p)
-	if err != nil {
-		return err
-	}
-	return nil
-
-}
-
-// GetExeData 获取核心数据ok
-func (c *MspKey) GetExeData() (string, error) {
-
-	if !c.AuthData.IsLogin {
-		return "", errors.New("请先登录>>>")
-	}
-	var p sendJson
-	p.Type = tagExeData
-	res, err := c.sendData(p)
-	if err != nil {
-		return "", err
-	}
-	var data struct {
-		ExeData string `json:"ExeData"`
-	}
-	marshal, err := json.Marshal(res.Data)
-	if err != nil {
-		return "", err
-	}
-	err = json.Unmarshal(marshal, &data)
-	if err != nil {
-		return "", err
-	}
-	return data.ExeData, nil
-
-}
-
-// GetVariable 获取远程变量ok
-func (c *MspKey) GetVariable(Key string) (string, error) {
-
-	if !c.AuthData.IsLogin {
-		return "", errors.New("请先登录>>>")
-	}
-	var p sendJson
-	p.Type = tagVariable
-	p.Data = bson.M{"Key": Key}
-	res, err := c.sendData(p)
-	if err != nil {
-		return "", err
-	}
-
-	var data struct {
-		ExeData string `json:"ExeData"`
-	}
-	marshal, err := json.Marshal(res.Data)
-	if err != nil {
-		return "", err
-	}
-	err = json.Unmarshal(marshal, &data)
-	if err != nil {
-		return "", err
-	}
-	return data.ExeData, nil
-}
-
-// ping 发送心跳包 内部已经完成自动心跳功能
-func (c *MspKey) ping() {
-	if c.isCoon {
-		var p sendJson
-		p.Type = tagPing
-		//发送检测数据 10分钟进行检测一次
-		if c.HatCount%10 == 0 || c.HatCount == 0 {
-			data := bson.M{
-				"Token": c.getToken(),
-				"Key":   c.devKey,
-			}
-			p.Data = data
-		}
-		c.HatCount++
-		_, _ = c.sendData(p)
-	}
-
-	//判断登陆后是否到期
-	if c.AuthData.IsLogin {
-		if c.AuthData.EndTime.Unix() < time.Now().Unix()+c.timeOffSet {
-			log.Fatalln("该账号已到期")
-		}
-
-	}
-}
-
-// QuickLogin 快速登录ok
-func (c *MspKey) QuickLogin() error {
-
-	ui := &bin.ClientUI{}
-	//判断是否网页登录
-	if c.Exe.IsWebLogin {
-		ui.WebLogin(c.config.IP, c.devKey)
-	} else {
-		err := ui.RunLoginUI(c.config.IP, c.devKey)
-		if err != nil {
-			ui.WebLogin(c.config.IP, c.devKey)
-		}
-	}
-
-	time.Sleep(2 * time.Second)
-	//打开网页
-
-	var p sendJson
-	p.Type = tagQuick
-	index := 0
-	for {
-		if !c.Exe.IsWebLogin {
-			//判断UI进程是否存在  不存在就退出
-			cmd := exec.Command("cmd", "/C", "tasklist")
-			// 隐藏cmd控制台窗口（防止每3秒一次的黑窗口闪烁）
-			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-			output, err := cmd.Output()
-			if err != nil {
-				return err
-			}
-			// 检查输出中是否包含目标进程名称
-			if !strings.Contains(string(output), "ClientUI.exe") {
-				return errors.New("UI关闭,程序退出")
-			}
-
-		}
-
-		res, err := c.sendData(p)
-		if err != nil {
-			if index == 0 {
-				log.Println(err)
-			}
-		} else {
-			err := c.AuthDataParse(res.Data)
-			if err != nil {
-				return err
-			}
-			msp.ClearScreen()
-			if !c.Exe.IsWebLogin {
-				//关闭UI进程
-				ui.CloseUI()
-				log.Println("登录成功，关闭UI进程")
-			}
-			return nil
-		}
-		time.Sleep(time.Second * 3)
-		index++
-	}
-}
-
-// VmpAuth VMP授权下发ok
-func (c *MspKey) VmpAuth() (string, error) {
-	if !c.AuthData.IsLogin {
-		return "", errors.New("请先登录>>>")
-	}
-	var p sendJson
-	p.Type = tagVMPAuth
-	p.Data = bson.M{"HardwareId": c.config.DevID}
-	res, err := c.sendData(p)
-	if err != nil {
-		return "", err
-	}
-
-	var data struct {
-		License string `json:"License"`
-	}
-	marshal, err := json.Marshal(res.Data)
-	if err != nil {
-		return "", err
-	}
-	err = json.Unmarshal(marshal, &data)
-	if err != nil {
-		return "", err
-	}
-
-	return data.License, nil
-}
-
-// safe 保护自身
-func (c *MspKey) safe() {
-	if !c.Exe.IsDbg {
+// Logout 退出登录（通知服务端 + 清理本地登录态）
+func (m *MspkeyPro) Logout() {
+	if m.SessionId == "" {
 		return
 	}
-	for {
-		time.Sleep(time.Second * 60)
-		if c.Exe.AdminID.Hex() != c.config.AdminKey {
-			log.Fatalln("密钥错误")
-		}
-		if !c.isCoon {
-			return
-		}
-	}
+	_, _ = m.doPost("Logout", map[string]string{"SessionId": m.SessionId})
 }
 
-// getToken 获取token
-func (c *MspKey) getToken() string {
-	data := bson.M{
-		"ExeID":   c.config.ExeID,
-		"DevID":   c.config.DevID,
-		"Version": c.config.Version,
-		"ExeMD5":  c.config.ExeMD5,
-		"AdminID": c.config.AdminKey,
-		"Time":    fmt.Sprintf("%d", time.Now().Unix()),
-		"CRCOld":  "",
-		"CRCNew":  "",
-	}
-	marshal, err := json.Marshal(data)
-	if err != nil {
-		return ""
-	}
-	msg := rc4EncryptString(c.devKey, string(marshal))
-	return msg
-}
-
-// reportConnStatus 上报退出状态
-func (c *MspKey) reportConnStatus() {
-	URL := "http://" + c.config.IP + "/api/user/ReportConnStatus?DevKey=" + c.devKey
-	if strings.Contains(c.config.IP, ":443") {
-		URL = "https://" + c.config.IP + "/api/user/ReportConnStatus?DevKey=" + c.devKey
-	}
-
-	_, _ = http.Post(URL, "application/json", nil)
-
-}
-
-// createSN()
-func (c *MspKey) createSN(Sig string) string {
-	md5 := msp.Encrypt{}
-	str := c.devKey + c.config.DevID + c.config.ExeID + c.config.AdminKey + Sig
-	return md5.Md5Encrypt(str)
-}
-
-// AuthDataParse  数据进行解析并保存到类内,内部自动判断是否到期
-func (c *MspKey) AuthDataParse(Data any) error {
-
-	Aec := msp.Encrypt{}
-	Key := c.config.AdminKey + c.devKey[:8]
-
-	data, ok := Data.(string)
-	if !ok {
-		return errors.New("数据类型错误")
-	}
-
-	decrypt, err := Aec.Aes256CbcDecrypt(data, []byte(Key))
+// ForceLogout 强制登出（用账号密码清理所有在线记录）
+func (m *MspkeyPro) ForceLogout(name, pwd string) error {
+	nonce := msp.GetRandomString(16)
+	payload := strings.Join([]string{m.ExeID, name, pwd, nonce}, "|")
+	sigB64, err := m.signPayload(payload)
 	if err != nil {
 		return err
 	}
 
-	var Auth struct {
-		UserID  string `json:"UserID"`  //用户ID 用于CK登录
-		EndTime string `json:"EndTime"` //用户到期时间
-		IsLogin bool   `json:"IsLogin"` //是否登录
-		SN      string `json:"SN"`      //用于校验
-		Sig     string `json:"Sig"`
+	inner := map[string]string{
+		"ExeID":  m.ExeID,
+		"Name":   name,
+		"Pwd":    pwd,
+		"Nonce":  nonce,
+		"SigB64": sigB64,
 	}
-
-	err = json.Unmarshal(decrypt, &Auth)
+	encStr, err := m.encryptLoginReq(inner)
 	if err != nil {
 		return err
 	}
-	sec, err := strconv.ParseInt(Auth.EndTime, 10, 64)
+	_, err = m.doPost("ForceLogout", map[string]string{"EncryptString": encStr})
+	return err
+}
+
+// ========================== 注册 / 充值 / 密码 ==========================
+
+// Register 用户注册
+func (m *MspkeyPro) Register(name, pwd, code string) error {
+	_, err := m.doPost("Register", map[string]string{
+		"DeviceID": m.DeviceID,
+		"ExeID":    m.ExeID,
+		"Name":     name,
+		"Pwd":      pwd,
+		"Code":     code,
+	})
+	return err
+}
+
+// GetCode 获取验证码
+func (m *MspkeyPro) GetCode() (string, error) {
+	ar, err := m.doPost("GetCode", struct{}{})
 	if err != nil {
-		return err
+		return "", err
 	}
-	c.AuthData.EndTime = time.Unix(sec, 0)
-	c.AuthData.UserID = Auth.UserID
-	c.AuthData.SN = Auth.SN
-	c.AuthData.IsLogin = Auth.IsLogin
-	c.AuthData.Sig = Auth.Sig
-
-	//校验SN码
-	if c.createSN(c.AuthData.Sig) != c.AuthData.SN {
-		return errors.New("SN码校验失败")
+	var r struct {
+		Code string `json:"Code"`
 	}
-
-	//判断到期时间
-	if c.AuthData.EndTime.Unix() < time.Now().Unix()+c.timeOffSet {
-		return errors.New("账号已过期")
+	if err := json.Unmarshal(ar.Data, &r); err != nil {
+		return "", err
 	}
+	return r.Code, nil
+}
 
+// UserPay 用户卡密充值
+func (m *MspkeyPro) UserPay(name, serial string) error {
+	_, err := m.doPost("UserPay", map[string]string{
+		"ExeID":  m.ExeID,
+		"Name":   name,
+		"Serial": serial,
+	})
+	return err
+}
+
+// UpUserPwd 修改密码
+func (m *MspkeyPro) UpUserPwd(name, oldPwd, newPwd string) error {
+	_, err := m.doPost("UpUserPwd", map[string]string{
+		"ExeID":  m.ExeID,
+		"Name":   name,
+		"OldPwd": oldPwd,
+		"NewPwd": newPwd,
+	})
+	return err
+}
+
+// BindDeviceID 换绑设备
+func (m *MspkeyPro) BindDeviceID(name, pwd string) error {
+	_, err := m.doPost("BindDeviceID", map[string]string{
+		"ExeID": m.ExeID,
+		"Name":  name,
+		"Pwd":   pwd,
+	})
+	return err
+}
+
+// GetUserEndTimeResp 到期时间
+type GetUserEndTimeResp struct {
+	UserEndTime string `json:"UserEndTime"`
+}
+
+// GetUserEndTime 获取指定用户到期时间
+func (m *MspkeyPro) GetUserEndTime(name string) (*GetUserEndTimeResp, error) {
+	ar, err := m.doPost("GetUserEndTime", map[string]string{
+		"ExeID": m.ExeID,
+		"Name":  name,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var r GetUserEndTimeResp
+	if err := json.Unmarshal(ar.Data, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// ========================== 卡密 / 支付 ==========================
+
+// CarInfo 卡密信息
+type CarInfo struct {
+	ID    string  `json:"ID"`
+	TyCar int64   `json:"TyCar"`
+	Price float64 `json:"Price"`
+}
+
+// FindCarInfoResp
+type FindCarInfoResp struct {
+	CarInfo CarInfo `json:"CarInfo"`
+	Stock   int64   `json:"Stock"`
+	AliPay  bool    `json:"AliPay"`
+}
+
+// FindCarInfo 获取卡密信息
+func (m *MspkeyPro) FindCarInfo(tyCar int64) (*FindCarInfoResp, error) {
+	ar, err := m.doPost("FindCarInfo", map[string]any{
+		"ExeID": m.ExeID,
+		"TyCar": tyCar,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var r FindCarInfoResp
+	if err := json.Unmarshal(ar.Data, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// AliPayCreateResp
+type AliPayCreateResp struct {
+	QrCode string `json:"QrCode"` // base64 二维码
+}
+
+// AliPayCreate 创建支付宝订单，返回二维码 base64
+func (m *MspkeyPro) AliPayCreate(carID string) (*AliPayCreateResp, error) {
+	ar, err := m.doPost("AliPayCreate", map[string]string{
+		"ExeID": m.ExeID,
+		"CarID": carID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var r AliPayCreateResp
+	if err := json.Unmarshal(ar.Data, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// IsPayResp
+type IsPayResp struct {
+	CarInfo struct {
+		ID     string  `json:"ID"`
+		TyCar  int64   `json:"TyCar"`
+		Price  float64 `json:"Price"`
+		Serial string  `json:"Serial"`
+	} `json:"CarInfo"`
+}
+
+// IsPay 查询是否已支付
+func (m *MspkeyPro) IsPay(carID string) (*IsPayResp, error) {
+	ar, err := m.doPost("IsPay", map[string]string{"CarID": carID})
+	if err != nil {
+		return nil, err
+	}
+	var r IsPayResp
+	if err := json.Unmarshal(ar.Data, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// PutCarResp
+type PutCarResp struct {
+	CarInfo struct {
+		ID     string  `json:"ID"`
+		TyCar  int64   `json:"TyCar"`
+		Price  float64 `json:"Price"`
+		Serial string  `json:"Serial"`
+	} `json:"CarInfo"`
+}
+
+// PutCar 提卡（支付成功后获取卡密）
+func (m *MspkeyPro) PutCar(billID string) (*PutCarResp, error) {
+	ar, err := m.doPost("PutCar", map[string]string{
+		"ExeID":  m.ExeID,
+		"BillID": billID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var r PutCarResp
+	if err := json.Unmarshal(ar.Data, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// ========================== 2. 需鉴权的接口 ==========================
+
+// requireLogin 鉴权接口的前置校验
+func (m *MspkeyPro) requireLogin() error {
+	if m.SessionId == "" {
+		return errors.New("未登录，请先调用 Login/CarLogin")
+	}
 	return nil
+}
+
+// decryptAuthResp 解密鉴权类接口返回：RC4(SessionKey, json({Data, SigB64}))
+func (m *MspkeyPro) decryptAuthResp(encryptString string, outData any) error {
+	plain, err := m.encrypt.Rc4DecodeString(m.SessionKey, encryptString)
+	if err != nil {
+		return fmt.Errorf("RC4 解密失败: %w", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(plain, &raw); err != nil {
+		return err
+	}
+
+	sigB64, ok := raw["SigB64"]
+	if !ok {
+		return errors.New("响应缺少 SigB64")
+	}
+	dataRaw, ok := raw["Variable"] // GetVariable 是 Variable，其他各自不同
+	if !ok {
+		// 尝试通用字段
+		for _, key := range []string{"UserInfo", "ExeData", "ExeKey", "Auth"} {
+			if v, found := raw[key]; found {
+				dataRaw = v
+				break
+			}
+		}
+	}
+
+	// 验签使用整个 plain（不含 SigB64 字段？需看服务端实现）
+	// 实际服务端是: json({Variable, SigB64}) 然后对 Variable 字段签名
+	// 因此这里简化为对 outData 的序列化签名
+	sigContent, _ := json.Marshal(outData)
+	var sigStr string
+	_ = json.Unmarshal(sigB64, &sigStr)
+	if err := m.verifySig(sigStr, sigContent); err != nil {
+		return fmt.Errorf("ECDSA 验签失败: %w", err)
+	}
+
+	// 把原始数据反序列化到 outData
+	if dataRaw != nil {
+		return json.Unmarshal(dataRaw, outData)
+	}
+	return nil
+}
+
+// GetVariable 获取作者下发的变量
+func (m *MspkeyPro) GetVariable(key string) (string, error) {
+	if err := m.requireLogin(); err != nil {
+		return "", err
+	}
+	ar, err := m.doPost("GetVariable", map[string]string{"Key": key})
+	if err != nil {
+		return "", err
+	}
+	var box struct {
+		EncryptString string `json:"encryptString"`
+	}
+	if err := json.Unmarshal(ar.Data, &box); err != nil {
+		return "", err
+	}
+
+	plain, err := m.encrypt.Rc4DecodeString(m.SessionKey, box.EncryptString)
+	if err != nil {
+		return "", err
+	}
+	var inner struct {
+		Variable string `json:"Variable"`
+		SigB64   string `json:"SigB64"`
+	}
+	if err := json.Unmarshal(plain, &inner); err != nil {
+		return "", err
+	}
+	if err := m.verifySig(inner.SigB64, []byte(inner.Variable)); err != nil {
+		return "", fmt.Errorf("验签失败: %w", err)
+	}
+	return inner.Variable, nil
+}
+
+// SetUerConf 设置用户配置
+func (m *MspkeyPro) SetUerConf(conf string) error {
+	if err := m.requireLogin(); err != nil {
+		return err
+	}
+	_, err := m.doPost("SetUerConf", map[string]string{"Conf": conf})
+	return err
+}
+
+// VMPAuth 获取 VMP 授权串
+func (m *MspkeyPro) VMPAuth() (string, error) {
+	if err := m.requireLogin(); err != nil {
+		return "", err
+	}
+	ar, err := m.doPost("VMPAuth", struct{}{})
+	if err != nil {
+		return "", err
+	}
+	var box struct {
+		EncryptString string `json:"encryptString"`
+	}
+	if err := json.Unmarshal(ar.Data, &box); err != nil {
+		return "", err
+	}
+	plain, err := m.encrypt.Rc4DecodeString(m.SessionKey, box.EncryptString)
+	if err != nil {
+		return "", err
+	}
+	var inner struct {
+		Auth   string `json:"Auth"`
+		SigB64 string `json:"SigB64"`
+	}
+	if err := json.Unmarshal(plain, &inner); err != nil {
+		return "", err
+	}
+	if err := m.verifySig(inner.SigB64, []byte(inner.Auth)); err != nil {
+		return "", err
+	}
+	return inner.Auth, nil
+}
+
+// GetExeData 获取软件核心数据
+func (m *MspkeyPro) GetExeData() (string, error) {
+	if err := m.requireLogin(); err != nil {
+		return "", err
+	}
+	ar, err := m.doPost("GetExeData", struct{}{})
+	if err != nil {
+		return "", err
+	}
+	var box struct {
+		EncryptString string `json:"encryptString"`
+	}
+	if err := json.Unmarshal(ar.Data, &box); err != nil {
+		return "", err
+	}
+	plain, err := m.encrypt.Rc4DecodeString(m.SessionKey, box.EncryptString)
+	if err != nil {
+		return "", err
+	}
+	var inner struct {
+		ExeData string `json:"ExeData"`
+		SigB64  string `json:"SigB64"`
+	}
+	if err := json.Unmarshal(plain, &inner); err != nil {
+		return "", err
+	}
+	if err := m.verifySig(inner.SigB64, []byte(inner.ExeData)); err != nil {
+		return "", err
+	}
+	return inner.ExeData, nil
+}
+
+// GetExeKey 获取软件密钥
+func (m *MspkeyPro) GetExeKey() (string, error) {
+	if err := m.requireLogin(); err != nil {
+		return "", err
+	}
+	ar, err := m.doPost("GetExeKey", struct{}{})
+	if err != nil {
+		return "", err
+	}
+	var box struct {
+		EncryptString string `json:"encryptString"`
+	}
+	if err := json.Unmarshal(ar.Data, &box); err != nil {
+		return "", err
+	}
+	plain, err := m.encrypt.Rc4DecodeString(m.SessionKey, box.EncryptString)
+	if err != nil {
+		return "", err
+	}
+	var inner struct {
+		ExeKey string `json:"ExeKey"`
+		SigB64 string `json:"SigB64"`
+	}
+	if err := json.Unmarshal(plain, &inner); err != nil {
+		return "", err
+	}
+	if err := m.verifySig(inner.SigB64, []byte(inner.ExeKey)); err != nil {
+		return "", err
+	}
+	return inner.ExeKey, nil
+}
+
+// GetUserInfo 获取当前登录用户信息（密码已被服务端清空）
+func (m *MspkeyPro) GetUserInfo() (*UserInfo, error) {
+	if err := m.requireLogin(); err != nil {
+		return nil, err
+	}
+	ar, err := m.doPost("GetUserInfo", struct{}{})
+	if err != nil {
+		return nil, err
+	}
+	var box struct {
+		EncryptString string `json:"encryptString"`
+	}
+	if err := json.Unmarshal(ar.Data, &box); err != nil {
+		return nil, err
+	}
+	plain, err := m.encrypt.Rc4DecodeString(m.SessionKey, box.EncryptString)
+	if err != nil {
+		return nil, err
+	}
+	var inner struct {
+		UserInfo json.RawMessage `json:"UserInfo"`
+		SigB64   string          `json:"SigB64"`
+	}
+	if err := json.Unmarshal(plain, &inner); err != nil {
+		return nil, err
+	}
+	if err := m.verifySig(inner.SigB64, inner.UserInfo); err != nil {
+		return nil, err
+	}
+	var ui UserInfo
+	if err := json.Unmarshal(inner.UserInfo, &ui); err != nil {
+		return nil, err
+	}
+	return &ui, nil
+}
+
+// AddBlack 添加设备黑名单（服务端添加成功后会返回 409 强制下线）
+func (m *MspkeyPro) AddBlack(bak string) {
+	_, _ = m.doPost("AddBlack", map[string]string{
+		"Bak":      bak,
+		"ExeID":    m.ExeID,
+		"DeviceID": m.DeviceID,
+		"UserID":   m.UserID,
+	})
+
+}
+
+// Detection 环境检测上报
+func (m *MspkeyPro) Detection() error {
+	//环境云检测
+	type UserConfig struct {
+		ExeID    string `json:"ExeID"`    //软件ID
+		DeviceID string `json:"DeviceID"` //设备ID
+		Version  string `json:"Version"`  //版本
+		ExeMD5   string `json:"ExeMD5"`   //软件MD5
+		AdminID  string `json:"AdminID"`  //管理员密钥
+		CRCOld   string `json:"CRCOld"`   //CRC旧的
+		CRCNew   string `json:"CRCNew"`   //CRC新的
+	}
+	var p = UserConfig{
+		ExeID:    m.ExeID,
+		DeviceID: m.DeviceID,
+		Version:  m.Version,
+		ExeMD5:   m.ExeMD5,
+		AdminID:  m.AdminID,
+		CRCOld:   m.ExeMD5,
+		CRCNew:   msp.GetExeMD5(),
+	}
+	pJson, _ := json.Marshal(p)
+	token := (&msp.Encrypt{}).Rc4EncryptString(m.UserID, string(pJson))
+
+	if err := m.requireLogin(); err != nil {
+		return err
+	}
+	_, err := m.doPost("Detection", map[string]string{"Token": token})
+	return err
+}
+
+// Ping 心跳包
+func (m *MspkeyPro) Ping() (pushMsg string, err error) {
+	if err := m.requireLogin(); err != nil {
+		return "", err
+	}
+	ar, err := m.doPost("Ping", struct{}{})
+	if err != nil {
+		return "", err
+	}
+	var box struct {
+		PushMsg string `json:"PushMsg"`
+	}
+	_ = json.Unmarshal(ar.Data, &box)
+	return box.PushMsg, nil
+}
+
+// ========================== 心跳 ==========================
+
+// startHeart 启动心跳 goroutine（登录成功后自动调用）
+// 若之前已在运行，先停掉旧的
+// 服务器判定：超过 30 分钟无心跳则强制离线
+func (m *MspkeyPro) startHeart() {
+	m.stopHeart()
+	m.heartStop = make(chan struct{})
+	interval := m.heartInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	const heartTimeout = 30 * time.Minute
+	lastOK := time.Now() // 登录成功即视为一次"成功"
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.heartStop:
+				return
+			case <-ticker.C:
+				if m.SessionId == "" {
+					return
+				}
+				// 超时兜底：距上次成功心跳已超过 30 分钟
+				if time.Since(lastOK) > heartTimeout {
+					// 允许离线 → 停心跳，程序继续跑（不强制退出）
+					if m.ExeInfo != nil && m.ExeInfo.IsSafeQuit {
+						log.Printf("[heart] 心跳超时：%v 无成功响应，IsSafeQuit=true 允许离线，停止心跳\n", time.Since(lastOK))
+						m.stopHeart()
+						return
+					}
+					// 不允许离线 → 退出
+					log.Printf("[heart] 心跳超时：%v 无成功响应，IsSafeQuit=false 强制退出\n", time.Since(lastOK))
+					m.Logout()
+					os.Exit(1)
+				}
+				if _, err := m.Ping(); err == nil {
+					lastOK = time.Now()
+				}
+			}
+		}
+	}()
+}
+
+// stopHeart 停止心跳 goroutine
+func (m *MspkeyPro) stopHeart() {
+	if m.heartStop != nil {
+		close(m.heartStop)
+		m.heartStop = nil
+	}
 }
