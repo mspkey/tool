@@ -258,9 +258,18 @@ func (c *MongoDB) Count(collection string, find interface{}) (int64, error) {
 	return coll.CountDocuments(ctx, find)
 }
 
-// CollectionOps 其他选项用于使用原生库函数
-func (c *MongoDB) CollectionOps(collection string) *mongo.Collection {
+// Context 返回带单次操作超时的上下文，调用方使用完后必须调用 cancel
+func (c *MongoDB) Context() (context.Context, context.CancelFunc) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.Client.Database(c.database).Collection(collection)
+	if c.OpTimeout > 0 {
+		return context.WithTimeout(context.Background(), c.OpTimeout)
+	}
+	return context.Background(), func() {}
+}
+
+// CollectionOps 其他选项用于使用原生库函数
+// 返回集合与带超时的上下文，调用方使用完后必须调用 cancel 释放
+func (c *MongoDB) CollectionOps(collection string) (*mongo.Collection, context.Context, context.CancelFunc) {
+	return c.opCtx(collection)
 }
