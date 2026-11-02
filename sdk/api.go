@@ -21,7 +21,7 @@ import (
 // jwtKeyInternal 与服务端 db.JwtKey 一致，登录请求外层 RC4 固定密钥
 const jwtKeyInternal = "MspKeyPro"
 
-const LockHost = "玄月授权pro"
+const LockHost = "LocalHost:8820"
 
 const (
 	// ClientPrivateKey 客户端 ECDSA 私钥 hex，用于对登录请求签名
