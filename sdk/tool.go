@@ -69,12 +69,15 @@ var defaultIplist = []string{"pro.msplock.vip:443", "pro.msplock.vip:8820"}
 // iplistCache 本地服务器列表缓存
 type iplistCache struct {
 	Iplist     []string `json:"Iplist"`     // 服务器地址列表
+	SigB64     string   `json:"SigB64"`     // 服务端对 Iplist 的 ECDSA 签名，防止本地缓存被篡改
 	UpdateTime int64    `json:"UpdateTime"` // 上次与服务端同步(或校验)的时间，Unix 秒
 }
 
-// fetchIplist 从服务器拉取服务器列表（RC4 解密）
+// fetchIplist 从服务器拉取服务器列表（RC4 解密 + ECDSA 验签）
 // 服务端路由: POST /api/v1/user/GetIplist → {"encryptString":"..."}
-func fetchIplist(IP string) ([]string, error) {
+// 解密后: {"Iplist":[...], "SigB64":"..."}，SigB64 是对 Iplist 的 ECDSA 签名
+// 返回: (列表, 签名, 错误) —— 签名需要写入本地缓存以防篡改
+func fetchIplist(IP string) ([]string, string, error) {
 	scheme := "http"
 	if strings.Contains(IP, ":443") {
 		scheme = "https"
@@ -83,13 +86,13 @@ func fetchIplist(IP string) ([]string, error) {
 
 	resp, err := http.Post(URL, "application/json", strings.NewReader("{}"))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	var ar struct {
@@ -100,29 +103,55 @@ func fetchIplist(IP string) ([]string, error) {
 		} `json:"Data"`
 	}
 	if err = json.Unmarshal(body, &ar); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if ar.Code != 200 {
 		if ar.Msg == "" {
 			ar.Msg = "获取服务器列表失败"
 		}
-		return nil, errors.New(ar.Msg)
+		return nil, "", errors.New(ar.Msg)
 	}
 
 	plain, err := (&msp.Encrypt{}).Rc4DecodeString(iplistRc4Key, ar.Data.EncryptString)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
+
+	// 解密后: {Iplist: [...], SigB64: "..."}
+	var raw map[string]json.RawMessage
+	if err = json.Unmarshal(plain, &raw); err != nil {
+		return nil, "", err
+	}
+
+	sigB64Bytes, ok := raw["SigB64"]
+	if !ok {
+		return nil, "", errors.New("GetIplist 响应缺少 SigB64 签名")
+	}
+	var sigB64 string
+	if err = json.Unmarshal(sigB64Bytes, &sigB64); err != nil {
+		return nil, "", err
+	}
+
+	iplistBytes, ok := raw["Iplist"]
+	if !ok {
+		return nil, "", errors.New("GetIplist 响应缺少 Iplist 字段")
+	}
+
+	// ECDSA 验签：用服务端公钥对 Iplist 字段签名验证
+	if err = (&msp.Encrypt{}).ECDSAVerify(ServerPublicKey, sigB64, iplistBytes); err != nil {
+		return nil, "", errors.New("GetIplist ECDSA 验签失败: " + err.Error())
+	}
+
 	var data struct {
 		Iplist []string `json:"Iplist"`
 	}
-	if err = json.Unmarshal(plain, &data); err != nil {
-		return nil, err
+	if err = json.Unmarshal(iplistBytes, &data.Iplist); err != nil {
+		return nil, "", err
 	}
 	if len(data.Iplist) == 0 {
-		return defaultIplist, nil
+		return defaultIplist, sigB64, nil
 	}
-	return data.Iplist, nil
+	return data.Iplist, sigB64, nil
 }
 
 // iplistCachePath 本地服务器列表缓存文件路径
@@ -158,6 +187,7 @@ func rc4Crypt(key, data []byte) ([]byte, error) {
 }
 
 // readIplistCache 读取并解密本地缓存，文件不存在或内容非法时返回错误
+// 缓存中必须包含 SigB64 签名，否则认为缓存非法需要重新拉取
 func readIplistCache() (*iplistCache, error) {
 	raw, err := os.ReadFile(iplistCachePath())
 	if err != nil {
@@ -182,6 +212,19 @@ func readIplistCache() (*iplistCache, error) {
 	if len(c.Iplist) == 0 {
 		return nil, errors.New("本地服务器列表为空")
 	}
+
+	// 缓存验签：必须有 SigB64，否则视为旧格式缓存需要重新拉取
+	if c.SigB64 == "" {
+		return nil, errors.New("本地缓存缺少签名，视为无效")
+	}
+	iplistBytes, err := json.Marshal(c.Iplist)
+	if err != nil {
+		return nil, err
+	}
+	if err = (&msp.Encrypt{}).ECDSAVerify(ServerPublicKey, c.SigB64, iplistBytes); err != nil {
+		return nil, errors.New("本地缓存 ECDSA 验签失败，可能被篡改: " + err.Error())
+	}
+
 	return &c, nil
 }
 
@@ -212,11 +255,12 @@ func writeIplistCache(c *iplistCache) error {
 
 // refreshIplist 到期后与服务端比对列表：不一致则更新，一致则只刷新时间
 func refreshIplist(c *iplistCache) {
-	list, err := fetchIplist(LockHost)
+	list, sigB64, err := fetchIplist(LockHost)
 	if err != nil {
 		return
 	}
 	c.Iplist = list
+	c.SigB64 = sigB64
 	c.UpdateTime = time.Now().Unix()
 	_ = writeIplistCache(c)
 }
@@ -253,10 +297,11 @@ func loadBalancing(IP string) (string, error) {
 	cache, err := readIplistCache()
 	if err != nil {
 		// 本地无缓存：拉取成功则保存，失败则使用兜底列表（不写缓存）
-		list, ferr := fetchIplist(IP)
-		cache = &iplistCache{Iplist: list, UpdateTime: time.Now().Unix()}
+		list, sigB64, ferr := fetchIplist(IP)
+		cache = &iplistCache{Iplist: list, SigB64: sigB64, UpdateTime: time.Now().Unix()}
 		if ferr != nil {
 			cache.Iplist = defaultIplist
+			cache.SigB64 = ""
 		} else {
 			_ = writeIplistCache(cache)
 		}
@@ -271,9 +316,9 @@ func loadBalancing(IP string) (string, error) {
 	}
 
 	// 本地列表全部不可用，尝试重新拉取，与本地不一致才覆盖缓存
-	list, err := fetchIplist(IP)
+	list, sigB64, err := fetchIplist(IP)
 	if err == nil && !sameIplist(list, cache.Iplist) {
-		cache = &iplistCache{Iplist: list, UpdateTime: time.Now().Unix()}
+		cache = &iplistCache{Iplist: list, SigB64: sigB64, UpdateTime: time.Now().Unix()}
 		_ = writeIplistCache(cache)
 		if ip, ok := pickIplist(list); ok {
 			return ip, nil
