@@ -122,7 +122,7 @@ func (m *MspkeyPro) Init(cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("Init: %w", err)
 	}
-
+	
 	// 拼 ServerURL，默认 http，含 :443 时走 https
 	scheme := "http"
 	if strings.Contains(ip, ":443") {

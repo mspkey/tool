@@ -13,8 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
-
+	"time"	
 	"github.com/mspkey/tool/msp"
 )
 
@@ -246,14 +245,18 @@ func writeIplistCache(c *iplistCache) error {
 	return nil
 }
 
-// refreshIplist 到期后与服务端重新同步（失败保留本地缓存）
-func refreshIplist(c *iplistCache) {
-	fresh, err := fetchIplist(LockHost)
-	if err != nil {
-		return
+// fetchIplistFromFallback 直接向兜底域名拉取服务器列表，返回第一个成功的结果
+// LockHost 只是进入负载均衡的标记，并非真实服务器，因此不参与拉取
+func fetchIplistFromFallback() (*iplistCache, error) {
+	var lastErr error
+	for _, host := range defaultIplist {
+		fresh, err := fetchIplist(host)
+		if err == nil {
+			return fresh, nil
+		}
+		lastErr = err
 	}
-	*c = *fresh
-	_ = writeIplistCache(c)
+	return nil, lastErr
 }
 
 // pickIplist 依次检测列表内的服务器，返回第一个可用的
@@ -279,24 +282,25 @@ func sameIplist(a, b []string) bool {
 // 优先使用本地服务器列表；本地不存在或超过 iplistRefreshInterval 时从服务端同步；
 // 到期时间以服务端签名的 UpdateTime 为准（客户端无法篡改）；
 // 列表全部不可用则重新拉取，最终回退返回列表第一个地址（与 Python SDK 一致）
+
 func loadBalancing(IP string) (string, error) {
 	//判断是否群主服务器
 	if IP != LockHost {
 		return IP, nil
 	}
 
-	// 获取服务器列表：本地缓存优先，拉取失败降级使用本地，完全无数据时用兜底列表
-	cache, err := readIplistCache()
-	if err != nil {
-		// 本地无缓存/缓存非法：拉取成功则保存，失败则使用兜底列表（不写缓存）
-		cache = &iplistCache{Iplist: defaultIplist}
-		if fresh, ferr := fetchIplist(IP); ferr == nil {
+	
+	// 获取服务器列表：本地缓存优先，破损/过期时从兜底域名重新拉取并写入缓存
+	cache, cacheErr := readIplistCache()
+	if cacheErr != nil || time.Now().Unix()-cache.UpdateTime >= int64(iplistRefreshInterval/time.Second) {
+		if fresh, ferr := fetchIplistFromFallback(); ferr == nil {
 			cache = fresh
 			_ = writeIplistCache(cache)
+		} else if cacheErr != nil {
+			// 无本地缓存且拉取失败：使用兜底列表（不写缓存）
+			cache = &iplistCache{Iplist: defaultIplist}
 		}
-	} else if time.Now().Unix()-cache.UpdateTime >= int64(iplistRefreshInterval/time.Second) {
-		// 到达校验周期，先与服务端同步（失败保留本地）
-		refreshIplist(cache)
+		// 拉取失败但本地有有效缓存：保留本地缓存继续使用
 	}
 
 	// 依次尝试本地列表中的服务器
@@ -305,7 +309,7 @@ func loadBalancing(IP string) (string, error) {
 	}
 
 	// 本地列表全部不可用，尝试重新拉取，与本地不一致才覆盖缓存
-	if fresh, ferr := fetchIplist(IP); ferr == nil && !sameIplist(fresh.Iplist, cache.Iplist) {
+	if fresh, ferr := fetchIplistFromFallback(); ferr == nil && !sameIplist(fresh.Iplist, cache.Iplist) {
 		cache = fresh
 		_ = writeIplistCache(cache)
 		if ip, ok := pickIplist(cache.Iplist); ok {
